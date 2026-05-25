@@ -38,6 +38,14 @@ class Config(BaseModel):
     def config_path(self) -> Path:
         return self.data_dir / CONFIG_FILENAME
 
+    @property
+    def db_path(self) -> Path:
+        return self.data_dir / "memory.db"
+
+    @property
+    def pdf_cache_dir(self) -> Path:
+        return self.data_dir / "cache" / "papers"
+
     @classmethod
     def load(cls, data_dir: Path | None = None) -> Config:
         """Load config from disk, or return defaults if the file does not exist."""

@@ -19,7 +19,7 @@
 | Epic | 标题 | 里程碑 | 状态 |
 |------|------|--------|------|
 | E1.1 | 项目基础搭建 | M1 | DONE |
-| E1.2 | 论文解析上下文 | M1 | PENDING |
+| E1.2 | 论文解析上下文 | M1 | DONE |
 | E1.3 | 核心 Agent 系统（Orchestrator + Analyst + Critic） | M1 | PENDING |
 | E1.4 | 基础记忆系统 | M1 | PENDING |
 | E1.5 | CLI 命令接口 | M1 | PENDING |

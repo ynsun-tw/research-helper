@@ -62,5 +62,5 @@ packages = ["research_agent"]
 exclude = ["tests/"]
 
 [[tool.mypy.overrides]]
-module = ["chromadb.*", "fitz.*", "textual.*"]
+module = ["chromadb.*", "textual.*", "fitz.*"]
 ignore_missing_imports = true

@@ -1,0 +1,33 @@
+---
+description: SQLite storage and PaperRepository conventions
+globs: src/research_agent/storage/**/*.py
+alwaysApply: false
+---
+
+# Storage Conventions
+
+## Database
+
+- Single `Database` class owns a `sqlite3.Connection`; schema auto-creates on init.
+- Schema source of truth: `planning/architecture.md §4.2`. Extensions allowed
+  for performance (e.g. `sections_json`, `full_text` on `papers`), but the
+  canonical columns must stay.
+- Use context manager `with db.conn:` to wrap writes (auto-commit/rollback).
+- Always parameterise queries with `?` — never string-format SQL.
+
+## Lists & JSON columns
+
+```python
+# ✅ Store list-typed fields as JSON text
+authors_json = json.dumps(paper.authors, ensure_ascii=False)
+
+# ✅ Tag search uses a quoted LIKE pattern to avoid substring collisions
+tag_like = f'%"{tag}"%'
+```
+
+## Repositories
+
+- One repo per aggregate (e.g. `PaperRepository`). Return domain entities,
+  never raw `sqlite3.Row`.
+- `save()` uses `INSERT ... ON CONFLICT(id) DO UPDATE` (upsert by primary key).
+- `get()` returns `Entity | None`; missing rows are not exceptions.

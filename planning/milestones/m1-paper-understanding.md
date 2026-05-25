@@ -51,6 +51,7 @@
 
 ## Epic E1.2 — 论文解析上下文
 
+> Status: **DONE**
 > 价值假设：高质量的论文解析是所有 Agent 分析的基础
 
 ### Story S1.2.1 — PDF 下载与解析
@@ -62,11 +63,11 @@
 - PDF 缓存到 `~/.research-agent/cache/papers/`
 
 **Tasks**:
-- [ ] T1.2.1.1 实现 `ArxivFetcher`：根据 arXiv ID 下载 PDF
-- [ ] T1.2.1.2 实现 `PDFParser`（PyMuPDF）：提取结构化文本
-- [ ] T1.2.1.3 实现论文实体 `Paper` dataclass（id、title、authors、abstract、sections、full_text）
-- [ ] T1.2.1.4 实现本地缓存：已下载的 PDF 不重复下载
-- [ ] T1.2.1.5 单元测试：解析样本论文，验证关键字段提取
+- [x] T1.2.1.1 实现 `ArxivFetcher`：根据 arXiv ID 下载 PDF
+- [x] T1.2.1.2 实现 `PDFParser`（PyMuPDF）：提取结构化文本
+- [x] T1.2.1.3 实现论文实体 `Paper` dataclass（id、title、authors、abstract、sections、full_text）
+- [x] T1.2.1.4 实现本地缓存：已下载的 PDF 不重复下载
+- [x] T1.2.1.5 单元测试：解析样本论文，验证关键字段提取
 
 ### Story S1.2.2 — 数据库基础层
 
@@ -76,9 +77,9 @@
 - 支持按 ID、标题、标签查询
 
 **Tasks**:
-- [ ] T1.2.2.1 实现 `Database` 类：初始化连接、建表（papers/ideas/discussions）
-- [ ] T1.2.2.2 实现 `PaperRepository`：CRUD 操作
-- [ ] T1.2.2.3 集成测试：存储 + 检索 Paper，验证数据完整性
+- [x] T1.2.2.1 实现 `Database` 类：初始化连接、建表（papers/ideas/discussions）
+- [x] T1.2.2.2 实现 `PaperRepository`：CRUD 操作
+- [x] T1.2.2.3 集成测试：存储 + 检索 Paper，验证数据完整性
 
 ---
 
