@@ -35,10 +35,12 @@ class BaseAgent(ABC):
         *,
         system_prompt: str | None = None,
         language: str = DEFAULT_LANGUAGE,
+        prompt_stem: str | None = None,
     ) -> None:
         self.llm = llm
         self.language = language
-        base = system_prompt or load_system_prompt(self.prompt_name)
+        stem = prompt_stem or self.prompt_name
+        base = system_prompt or load_system_prompt(stem)
         self.system_prompt = f"{base}\n\n{response_language_instruction(language)}"
 
     @property

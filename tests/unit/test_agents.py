@@ -89,6 +89,7 @@ def test_critic_low_score_requires_reason() -> None:
 def test_parse_support_score_from_text() -> None:
     assert parse_support_score('{"support_score": 7}') == 7.0
     assert parse_support_score("Overall support score: 6/9") == 6.0
+    assert parse_support_score("Overall 7/10 with caveats") == 7.0
 
 
 def test_normalize_score_clamps() -> None:
@@ -107,3 +108,39 @@ def test_analyst_run_returns_agent_response() -> None:
 def test_critic_run_missing_paper_raises() -> None:
     with pytest.raises(TypeError):
         Critic(MockLLMProvider()).run({})
+
+
+IDEA_ANALYST_JSON = json.dumps(
+    {
+        "supports": ["Concrete benefit"],
+        "suggestions": ["Pilot study"],
+        "evidence": [{"claim": "Assumption A", "basis": "Prior art"}],
+        "confidence": 0.6,
+    }
+)
+IDEA_CRITIC_JSON = json.dumps(
+    {
+        "objections": ["Scope too broad"],
+        "support_score": 5,
+        "score_reason": "Under-specified evaluation",
+        "suggestions": ["Narrow task"],
+        "honesty_note": "",
+    }
+)
+
+
+def test_load_analyst_idea_prompt() -> None:
+    prompt = load_system_prompt("analyst_idea")
+    assert "Idea debate" in prompt or "idea" in prompt.lower()
+
+
+def test_analyst_analyze_idea() -> None:
+    result = Analyst(MockLLMProvider([IDEA_ANALYST_JSON])).analyze_idea("New method")
+    assert result.supports
+    assert result.confidence == 0.6
+
+
+def test_critic_critique_idea() -> None:
+    result = Critic(MockLLMProvider([IDEA_CRITIC_JSON])).critique_idea("New method")
+    assert result.support_score == 5.0
+    assert result.score_reason

@@ -76,6 +76,23 @@ class Database:
     def _init_schema(self) -> None:
         with self.conn:
             self.conn.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Add M2 columns to existing databases without breaking older installs."""
+        idea_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(ideas)").fetchall()}
+        if "score_history" not in idea_cols:
+            self.conn.execute("ALTER TABLE ideas ADD COLUMN score_history TEXT")
+        if "user_score_feedback" not in idea_cols:
+            self.conn.execute("ALTER TABLE ideas ADD COLUMN user_score_feedback TEXT")
+
+        disc_rows = self.conn.execute("PRAGMA table_info(discussions)").fetchall()
+        disc_cols = {row[1] for row in disc_rows}
+        if "idea_id" not in disc_cols:
+            self.conn.execute("ALTER TABLE discussions ADD COLUMN idea_id TEXT")
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_discussions_idea ON discussions(idea_id)"
+            )
 
     def close(self) -> None:
         self.conn.close()

@@ -6,8 +6,10 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from research_agent.cli_ideas import run_ideas_list, run_ideas_show, run_ideas_update
 from research_agent.cli_services import run_discuss, run_read
 from research_agent.config import Config, ConfigError
+from research_agent.core.idea import IDEA_STATUSES, IdeaStatus
 from research_agent.core.language import language_label
 from research_agent.core.llm import LLMClient
 
@@ -17,7 +19,9 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 config_app = typer.Typer(help="Manage configuration (API keys, model, paths).")
+ideas_app = typer.Typer(help="Manage research ideas (list, show, update status).")
 app.add_typer(config_app, name="config")
+app.add_typer(ideas_app, name="ideas")
 
 console = Console()
 
@@ -91,17 +95,88 @@ def read(
 
 @app.command()
 def discuss(
+    paper: str = typer.Option(
+        ...,
+        "--paper",
+        "-p",
+        help="Anchor paper: arXiv id, title keywords, or local PDF path",
+    ),
+    idea: str | None = typer.Argument(
+        None,
+        help='Research idea about the paper (e.g. "Apply attention to drug discovery")',
+    ),
     topic: str | None = typer.Option(
         None,
         "--topic",
         "-t",
-        help="Optional opening topic for the discussion",
+        help="Opening idea (alias for positional argument)",
+    ),
+    idea_id: str | None = typer.Option(
+        None,
+        "--idea-id",
+        help="Link session to an existing saved idea",
     ),
 ) -> None:
-    """Start an interactive critical discussion (Analyst + Critic each turn)."""
+    """Debate a research idea grounded in a specific paper (search + load first)."""
     cfg = _ensure_api_key()
     llm = LLMClient.from_config(cfg)
-    code = run_discuss(cfg, llm, console, opening_topic=topic)
+    opening = idea or topic
+    code = run_discuss(
+        cfg,
+        llm,
+        console,
+        paper_query=paper,
+        opening_topic=opening,
+        idea_id=idea_id,
+    )
+    raise typer.Exit(code=code)
+
+
+@ideas_app.command("list")
+def ideas_list() -> None:
+    """List ideas grouped by status."""
+    cfg = _load_config()
+    code = run_ideas_list(cfg, console)
+    raise typer.Exit(code=code)
+
+
+@ideas_app.command("show")
+def ideas_show(
+    idea_id: str = typer.Argument(..., help="Idea id or prefix"),
+) -> None:
+    """Show idea details, score history, and linked discussions."""
+    cfg = _load_config()
+    code = run_ideas_show(cfg, console, idea_id)
+    raise typer.Exit(code=code)
+
+
+@ideas_app.command("update")
+def ideas_update(
+    idea_id: str = typer.Argument(..., help="Idea id or prefix"),
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help=f"New status: {', '.join(IDEA_STATUSES)}",
+    ),
+    feedback: str | None = typer.Option(
+        None,
+        "--feedback",
+        help='Record score disagreement (e.g. "I think you overestimated")',
+    ),
+) -> None:
+    """Update idea status or record score feedback without changing the score."""
+    cfg = _load_config()
+    if status is not None and status not in IDEA_STATUSES:
+        console.print(f"[red]Error:[/red] Invalid status. Choose: {', '.join(IDEA_STATUSES)}")
+        raise typer.Exit(code=1)
+    new_status: IdeaStatus | None = status  # validated against IDEA_STATUSES above
+    code = run_ideas_update(
+        cfg,
+        console,
+        idea_id,
+        status=new_status,
+        feedback=feedback,
+    )
     raise typer.Exit(code=code)
 
 

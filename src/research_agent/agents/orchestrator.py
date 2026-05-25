@@ -6,9 +6,10 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
-from research_agent.agents.analyst import AnalysisResult, Analyst
+from research_agent.agents.analyst import AnalysisResult, Analyst, IdeaSupportResult
 from research_agent.agents.base import AgentResponse
 from research_agent.agents.critic import Critic, CritiqueResult
+from research_agent.agents.debate import DebateHistory, DebateResult, FollowUpResult
 from research_agent.core.language import DEFAULT_LANGUAGE
 from research_agent.core.llm import LLMProvider
 from research_agent.core.paper import Paper, Section
@@ -61,6 +62,14 @@ class Orchestrator:
         self.language = language
         self.analyst = Analyst(llm, language=language)
         self.critic = Critic(llm, language=language)
+        self.idea_analyst = Analyst(llm, language=language, prompt_stem="analyst_idea")
+        self.idea_critic = Critic(llm, language=language, prompt_stem="critic_idea")
+        self.idea_analyst_followup = Analyst(
+            llm, language=language, prompt_stem="analyst_idea_followup"
+        )
+        self.idea_critic_followup = Critic(
+            llm, language=language, prompt_stem="critic_idea_followup"
+        )
 
     def route(self, command: str, context: dict[str, Any] | None = None) -> Task:
         """Map a command string to a :class:`Task`."""
@@ -119,6 +128,143 @@ class Orchestrator:
             asyncio.to_thread(self.critic.run, {"paper": paper}),
         )
         return analyst_resp, critic_resp
+
+    async def debate_round_async(
+        self,
+        idea_text: str,
+        context: str = "",
+        *,
+        paper: Paper | None = None,
+        history: DebateHistory | None = None,
+        target: str | None = None,
+    ) -> DebateResult:
+        """Run Idea debate (Analyst + Critic) or a targeted follow-up to one agent."""
+        round_index = len(history.rounds) if history else 0
+        prev = history.rounds[-1].result if history and history.rounds else None
+
+        if target == "analyst":
+            analyst = await asyncio.to_thread(
+                self.idea_analyst.analyze_idea, idea_text, context, paper=paper
+            )
+            if prev is not None:
+                return DebateResult.from_agent_results(
+                    analyst,
+                    _critique_from_debate(prev),
+                    round_index=round_index,
+                    score_delta=None,
+                )
+            critic = CritiqueResult(objections=[], support_score=5.0, score_reason="")
+            return DebateResult.from_agent_results(analyst, critic, round_index=round_index)
+
+        if target == "critic":
+            critic = await asyncio.to_thread(
+                self.idea_critic.critique_idea, idea_text, context, paper=paper
+            )
+            delta = history.score_delta(critic.support_score) if history else None
+            if prev is not None:
+                analyst = _support_from_debate(prev)
+                return DebateResult.from_agent_results(
+                    analyst,
+                    critic,
+                    round_index=round_index,
+                    score_delta=delta,
+                )
+            analyst = IdeaSupportResult(supports=[], suggestions=[], evidence=[])
+            return DebateResult.from_agent_results(
+                analyst, critic, round_index=round_index, score_delta=delta
+            )
+
+        analyst_result, critic_result = await asyncio.gather(
+            asyncio.to_thread(
+                self.idea_analyst.analyze_idea, idea_text, context, paper=paper
+            ),
+            asyncio.to_thread(
+                self.idea_critic.critique_idea, idea_text, context, paper=paper
+            ),
+        )
+        delta = history.score_delta(critic_result.support_score) if history else None
+        return DebateResult.from_agent_results(
+            analyst_result,
+            critic_result,
+            round_index=round_index,
+            score_delta=delta,
+        )
+
+    async def followup_turn_async(
+        self,
+        idea_text: str,
+        user_message: str,
+        context: str = "",
+        *,
+        paper: Paper | None = None,
+        target: str | None = None,
+    ) -> FollowUpResult:
+        """Answer a follow-up in prose; requires a prior structured opening round."""
+        if target == "analyst":
+            analyst_text = await asyncio.to_thread(
+                self.idea_analyst_followup.followup_idea,
+                idea_text,
+                user_message,
+                context,
+                paper=paper,
+            )
+            return FollowUpResult(
+                analyst_conclusion=analyst_text,
+                critic_conclusion="",
+                targeted_agent="analyst",
+            )
+        if target == "critic":
+            critic_text = await asyncio.to_thread(
+                self.idea_critic_followup.followup_idea,
+                idea_text,
+                user_message,
+                context,
+                paper=paper,
+            )
+            return FollowUpResult(
+                analyst_conclusion="",
+                critic_conclusion=critic_text,
+                targeted_agent="critic",
+            )
+
+        analyst_text, critic_text = await asyncio.gather(
+            asyncio.to_thread(
+                self.idea_analyst_followup.followup_idea,
+                idea_text,
+                user_message,
+                context,
+                paper=paper,
+            ),
+            asyncio.to_thread(
+                self.idea_critic_followup.followup_idea,
+                idea_text,
+                user_message,
+                context,
+                paper=paper,
+            ),
+        )
+        return FollowUpResult(
+            analyst_conclusion=analyst_text,
+            critic_conclusion=critic_text,
+        )
+
+
+def _support_from_debate(prev: DebateResult) -> IdeaSupportResult:
+    return IdeaSupportResult(
+        supports=list(prev.supports),
+        suggestions=list(prev.suggestions),
+        evidence=[],
+        confidence=prev.confidence,
+    )
+
+
+def _critique_from_debate(prev: DebateResult) -> CritiqueResult:
+    return CritiqueResult(
+        objections=list(prev.objections),
+        support_score=prev.score,
+        score_reason=prev.score_reason,
+        suggestions=list(prev.suggestions),
+    )
 
 
 def _paper_from_memory(memory: WorkingMemory, *, max_context_tokens: int) -> Paper:

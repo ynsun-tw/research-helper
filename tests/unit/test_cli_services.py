@@ -8,6 +8,7 @@ from io import StringIO
 import pytest
 from rich.console import Console
 
+import research_agent.cli_services as svc
 from research_agent.cli_services import run_discuss, run_read
 from research_agent.config import Config
 from research_agent.core.llm import MockLLMProvider
@@ -28,6 +29,24 @@ CRITIC_JSON = json.dumps(
         "objections": ["O1"],
         "support_score": 8,
         "score_reason": "Good",
+        "honesty_note": "",
+    }
+)
+
+IDEA_ANALYST_JSON = json.dumps(
+    {
+        "supports": ["Solid premise"],
+        "suggestions": ["More baselines"],
+        "evidence": [],
+        "confidence": 0.8,
+    }
+)
+IDEA_CRITIC_JSON = json.dumps(
+    {
+        "objections": ["Risky assumption"],
+        "support_score": 7,
+        "score_reason": "Viable with fixes",
+        "suggestions": [],
         "honesty_note": "",
     }
 )
@@ -62,13 +81,31 @@ def test_run_read_success(
     assert "Critic" in out
 
 
-def test_run_discuss_one_turn_and_exit(config_dir) -> None:
+def test_run_discuss_one_turn_and_exit(
+    config_dir,
+    paper: Paper,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     cfg = Config(data_dir=config_dir, api_key="sk-x")
     console = Console(file=StringIO(), width=120)
-    llm = MockLLMProvider([ANALYST_JSON, CRITIC_JSON])
+    llm = MockLLMProvider([IDEA_ANALYST_JSON, IDEA_CRITIC_JSON])
     inputs = iter(["hello", "exit"])
 
-    code = run_discuss(cfg, llm, console, input_fn=lambda _: next(inputs))
+    monkeypatch.setattr(
+        svc,
+        "_load_anchor_paper",
+        lambda *args, **kwargs: paper,
+    )
+
+    code = run_discuss(
+        cfg,
+        llm,
+        console,
+        paper_query="arxiv:1706.03762",
+        input_fn=lambda _: next(inputs),
+        use_chroma=False,
+        prompt_save_idea=False,
+    )
     assert code == 0
     out = console.file.getvalue()
     assert "Session saved" in out

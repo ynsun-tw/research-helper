@@ -1,4 +1,4 @@
-> Status: PENDING
+> Status: DONE
 > Index: [../../PLAN.md](../../PLAN.md)
 
 # M2 — Idea 讨论工坊
@@ -8,7 +8,7 @@
 **时间**: 1 周
 **前置条件**: M1 完成（Analyst、Critic、基础 CLI 可用）
 **验收标准**:
-- `research discuss "我的 idea"` 触发辩论模式，输出支持/反对双视角
+- `research discuss -p "论文标题或arxiv id" "我的 idea"` 先检索/加载锚定论文，再辩论：首轮结构化输出；后续追问基于论文+上下文给结论
 - Critic 评分稳定输出 1-10 分，低于 7 分有理由说明
 - Idea 可保存、查看、更新状态
 - 对话中能看到与历史讨论的关联提醒
@@ -28,11 +28,11 @@
 - 输出格式可通过 Rich 渲染为彩色分区
 
 **Tasks**:
-- [ ] T2.1.1.1 设计辩论输出 schema（DebateResult: supports, objections, suggestions, score, confidence）
-- [ ] T2.1.1.2 更新 Analyst System Prompt：Idea 讨论时要求具体论据
-- [ ] T2.1.1.3 更新 Critic System Prompt：禁止"我同意你的观点"式回复
-- [ ] T2.1.1.4 实现 `Orchestrator.debate_idea(idea_text) → DebateResult`
-- [ ] T2.1.1.5 单元测试：验证输出 schema 字段完整性
+- [x] T2.1.1.1 设计辩论输出 schema（DebateResult: supports, objections, suggestions, score, confidence）
+- [x] T2.1.1.2 更新 Analyst System Prompt：Idea 讨论时要求具体论据
+- [x] T2.1.1.3 更新 Critic System Prompt：禁止"我同意你的观点"式回复
+- [x] T2.1.1.4 实现 `Orchestrator.debate_round_async(...) → DebateResult`
+- [x] T2.1.1.5 单元测试：验证输出 schema 字段完整性
 
 ### Story S2.1.2 — 多轮辩论迭代
 
@@ -43,10 +43,10 @@
 - 每轮保留完整辩论上下文
 
 **Tasks**:
-- [ ] T2.1.2.1 实现辩论会话状态：持有 DebateHistory（每轮的 DebateResult）
-- [ ] T2.1.2.2 实现追问模式：用户输入针对特定 Agent 的追问
-- [ ] T2.1.2.3 实现评分变化追踪：记录 Critic 评分跨轮次的变化
-- [ ] T2.1.2.4 集成测试：3 轮辩论流程，验证上下文连贯性
+- [x] T2.1.2.1 实现辩论会话状态：持有 DebateHistory（每轮的 DebateResult）
+- [x] T2.1.2.2 实现追问模式：用户输入针对特定 Agent 的追问
+- [x] T2.1.2.3 实现评分变化追踪：记录 Critic 评分跨轮次的变化
+- [x] T2.1.2.4 集成测试：3 轮辩论流程，验证上下文连贯性
 
 ---
 
@@ -63,10 +63,10 @@
 - 用户可给评分打标记（"我觉得你高估了"），系统记录但不立即改变
 
 **Tasks**:
-- [ ] T2.2.1.1 在 Critic System Prompt 中实现评分量表（1-3/4-6/7-8/9/禁10）
-- [ ] T2.2.1.2 实现评分解析器：稳定从 LLM 输出提取数字（处理 "7/10", "7 out of 10" 等格式）
-- [ ] T2.2.1.3 实现用户评分反馈记录（不影响当前评分，写入 metadata）
-- [ ] T2.2.1.4 单元测试：评分解析边界情况
+- [x] T2.2.1.1 在 Critic System Prompt 中实现评分量表（1-3/4-6/7-8/9/禁10）
+- [x] T2.2.1.2 实现评分解析器：稳定从 LLM 输出提取数字（处理 "7/10", "7 out of 10" 等格式）
+- [x] T2.2.1.3 实现用户评分反馈记录（不影响当前评分，写入 metadata）
+- [x] T2.2.1.4 单元测试：评分解析边界情况
 
 ### Story S2.2.2 — 评分历史与趋势
 
@@ -76,9 +76,9 @@
 - Memory Keeper 能检测到某 Idea 评分持续低于 5 时主动提示
 
 **Tasks**:
-- [ ] T2.2.2.1 在 `ideas` 表新增 `score_history` 字段（JSON array）
-- [ ] T2.2.2.2 实现评分历史更新逻辑（每次讨论追加）
-- [ ] T2.2.2.3 实现评分趋势查询接口
+- [x] T2.2.2.1 在 `ideas` 表新增 `score_history` 字段（JSON array）
+- [x] T2.2.2.2 实现评分历史更新逻辑（每次讨论追加）
+- [x] T2.2.2.3 实现评分趋势查询接口
 
 ---
 
@@ -95,11 +95,11 @@
 - `research ideas update <id> --status shelved` 手动更新状态
 
 **Tasks**:
-- [ ] T2.3.1.1 实现 `IdeaRepository`：CRUD 操作
-- [ ] T2.3.1.2 实现状态机：合法状态转换（active → shelved 允许，completed → active 不允许）
-- [ ] T2.3.1.3 实现 `ideas` CLI 子命令（list/show/update/archive）
-- [ ] T2.3.1.4 在 `discuss` 命令结束时提示保存 Idea
-- [ ] T2.3.1.5 集成测试：完整状态转换流程
+- [x] T2.3.1.1 实现 `IdeaRepository`：CRUD 操作
+- [x] T2.3.1.2 实现状态机：合法状态转换（active → shelved 允许，completed → active 不允许）
+- [x] T2.3.1.3 实现 `ideas` CLI 子命令（list/show/update）
+- [x] T2.3.1.4 在 `discuss` 命令结束时提示保存 Idea
+- [x] T2.3.1.5 集成测试：完整状态转换流程
 
 ### Story S2.3.2 — 讨论脉络追踪
 
@@ -109,8 +109,8 @@
 - Memory Keeper 在新讨论开始时主动提醒关联的历史 Idea
 
 **Tasks**:
-- [ ] T2.3.2.1 在讨论表新增 `idea_id` 外键
-- [ ] T2.3.2.2 实现讨论与 Idea 的关联逻辑（创建/关联已有 Idea）
-- [ ] T2.3.2.3 实现 Memory Keeper 基础版：在会话开始时检索相似历史（向量相似度）
-- [ ] T2.3.2.4 实现 ChromaDB 向量存储：Idea 描述向量化存储
-- [ ] T2.3.2.5 集成测试：相似 Idea 检测（给出一个类似的 Idea，验证能找到历史记录）
+- [x] T2.3.2.1 在讨论表新增 `idea_id` 外键
+- [x] T2.3.2.2 实现讨论与 Idea 的关联逻辑（创建/关联已有 Idea）
+- [x] T2.3.2.3 实现 Memory Keeper 基础版：在会话开始时检索相似历史（向量相似度）
+- [x] T2.3.2.4 实现 ChromaDB 向量存储：Idea 描述向量化存储
+- [x] T2.3.2.5 集成测试：相似 Idea 检测（给出一个类似的 Idea，验证能找到历史记录）

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from research_agent.agents.base import AgentResponse, BaseAgent, extract_json
+from research_agent.core.debate_prompts import idea_debate_user_prompt
 from research_agent.core.paper import Paper
 
 
@@ -69,6 +70,69 @@ class Analyst(BaseAgent):
         prompt = _paper_prompt(paper)
         raw = self._chat(prompt)
         return _parse_analysis(raw)
+
+    def analyze_idea(
+        self,
+        idea_text: str,
+        context: str = "",
+        *,
+        paper: Paper | None = None,
+    ) -> IdeaSupportResult:
+        prompt = idea_debate_user_prompt(idea_text, context, paper=paper)
+        raw = self._chat(prompt)
+        return _parse_idea_support(raw)
+
+    def followup_idea(
+        self,
+        idea_text: str,
+        user_message: str,
+        context: str = "",
+        *,
+        paper: Paper | None = None,
+    ) -> str:
+        prompt = idea_debate_user_prompt(
+            idea_text, context, paper=paper, user_message=user_message
+        )
+        raw = self._chat(prompt)
+        return _parse_conclusion(raw)
+
+
+@dataclass(slots=True)
+class IdeaSupportResult:
+    supports: list[str]
+    suggestions: list[str]
+    evidence: list[ClaimedVsEvidence]
+    confidence: float = 0.5
+    raw_response: str = ""
+
+
+def _parse_conclusion(raw: str) -> str:
+    data = extract_json(raw)
+    text = str(data.get("conclusion", "")).strip()
+    if text:
+        return text
+    return raw.strip()
+
+
+def _parse_idea_support(raw: str) -> IdeaSupportResult:
+    data = extract_json(raw)
+    evidence = []
+    for item in data.get("evidence") or []:
+        if isinstance(item, dict):
+            evidence.append(
+                ClaimedVsEvidence(
+                    claim=str(item.get("claim", item.get("assumption", ""))),
+                    evidence=str(item.get("basis", item.get("evidence", ""))),
+                )
+            )
+    confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
+    return IdeaSupportResult(
+        supports=_as_str_list(data.get("supports")),
+        suggestions=_as_str_list(data.get("suggestions")),
+        evidence=evidence,
+        confidence=confidence,
+        raw_response=raw,
+    )
 
 
 def _paper_prompt(paper: Paper) -> str:

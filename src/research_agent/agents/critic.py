@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from research_agent.agents.base import AgentResponse, BaseAgent, extract_json
+from research_agent.core.debate_prompts import idea_debate_user_prompt
 from research_agent.core.paper import Paper
 
 
@@ -16,6 +17,7 @@ class CritiqueResult:
     support_score: float
     score_reason: str = ""
     honesty_note: str = ""
+    suggestions: list[str] = field(default_factory=list)
     raw_response: str = ""
 
     def to_agent_response(self) -> AgentResponse:
@@ -58,6 +60,31 @@ class Critic(BaseAgent):
         raw = self._chat(prompt, temperature=0.3)
         return _parse_critique(raw)
 
+    def critique_idea(
+        self,
+        idea_text: str,
+        context: str = "",
+        *,
+        paper: Paper | None = None,
+    ) -> CritiqueResult:
+        prompt = idea_debate_user_prompt(idea_text, context, paper=paper)
+        raw = self._chat(prompt, temperature=0.3)
+        return _parse_critique(raw)
+
+    def followup_idea(
+        self,
+        idea_text: str,
+        user_message: str,
+        context: str = "",
+        *,
+        paper: Paper | None = None,
+    ) -> str:
+        prompt = idea_debate_user_prompt(
+            idea_text, context, paper=paper, user_message=user_message
+        )
+        raw = self._chat(prompt, temperature=0.3)
+        return _parse_followup_conclusion(raw)
+
 
 def _paper_prompt(paper: Paper) -> str:
     sections = "\n\n".join(f"### {s.title}\n{s.content[:2000]}" for s in paper.sections[:8])
@@ -81,7 +108,9 @@ def parse_support_score(text: str, parsed: dict[str, object] | None = None) -> f
     patterns = (
         r'"support_score"\s*:\s*(\d+(?:\.\d+)?)',
         r"support[_ ]?score[:\s]+(\d+(?:\.\d+)?)",
-        r"score[:\s]+(\d+(?:\.\d+)?)\s*/\s*9",
+        r"score[:\s]+(\d+(?:\.\d+)?)\s*/\s*(?:9|10)",
+        r"(\d+(?:\.\d+)?)\s*/\s*10",
+        r"(\d+(?:\.\d+)?)\s+out\s+of\s+10",
         r"score[:\s]+(\d+(?:\.\d+)?)",
     )
     for pattern in patterns:
@@ -122,8 +151,17 @@ def _parse_critique(raw: str) -> CritiqueResult:
         support_score=score,
         score_reason=score_reason,
         honesty_note=honesty_note,
+        suggestions=_as_str_list(data.get("suggestions")),
         raw_response=raw,
     )
+
+
+def _parse_followup_conclusion(raw: str) -> str:
+    data = extract_json(raw)
+    text = str(data.get("conclusion", "")).strip()
+    if text:
+        return text
+    return raw.strip()
 
 
 def _as_str_list(value: object) -> list[str]:

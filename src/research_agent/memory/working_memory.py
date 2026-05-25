@@ -34,6 +34,7 @@ class WorkingMemory:
 
     session_id: str
     messages: list[MemoryMessage] = field(default_factory=list)
+    idea_id: str | None = None
     _persisted_count: int = field(default=0, repr=False)
 
     @classmethod
@@ -91,6 +92,7 @@ class WorkingMemory:
                 msg.role,
                 msg.content,
                 metadata=msg.metadata or None,
+                idea_id=self.idea_id,
             )
             written += 1
         self._persisted_count = len(self.messages)

@@ -34,6 +34,24 @@ CRITIC_JSON = json.dumps(
     }
 )
 
+IDEA_ANALYST_JSON = json.dumps(
+    {
+        "supports": ["Applies attention well"],
+        "suggestions": ["Add baseline"],
+        "evidence": [],
+        "confidence": 0.7,
+    }
+)
+IDEA_CRITIC_JSON = json.dumps(
+    {
+        "objections": ["Dataset unclear"],
+        "support_score": 6,
+        "score_reason": "Needs evaluation plan",
+        "suggestions": [],
+        "honesty_note": "",
+    }
+)
+
 
 @pytest.fixture
 def paper() -> Paper:
@@ -78,6 +96,7 @@ def test_read_local_pdf_e2e(
 
 def test_discuss_exit_saves_session(
     config_dir: Path,
+    paper: Paper,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = Config(data_dir=config_dir, api_key="sk-test")
@@ -85,11 +104,19 @@ def test_discuss_exit_saves_session(
 
     from research_agent.core.llm import LLMClient, MockLLMProvider
 
-    mock = MockLLMProvider([ANALYST_JSON, CRITIC_JSON, ANALYST_JSON, CRITIC_JSON])
+    mock = MockLLMProvider([IDEA_ANALYST_JSON, IDEA_CRITIC_JSON])
     monkeypatch.setattr(LLMClient, "from_config", lambda config: mock)
     monkeypatch.setattr("research_agent.cli._load_config", lambda: cfg)
+    monkeypatch.setattr(
+        "research_agent.cli_services._load_anchor_paper",
+        lambda *args, **kwargs: paper,
+    )
 
-    result = runner.invoke(app, ["discuss"], input="What is attention?\nexit\n")
+    result = runner.invoke(
+        app,
+        ["discuss", "--paper", "arxiv:1706.03762", "Apply attention to biology"],
+        input="exit\n",
+    )
     assert result.exit_code == 0, result.stdout
     assert "Session saved" in result.stdout
     assert "Analyst" in result.stdout

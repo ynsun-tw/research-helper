@@ -100,6 +100,10 @@ class Config(BaseModel):
     def pdf_cache_dir(self) -> Path:
         return self.data_dir / "cache" / "papers"
 
+    @property
+    def chroma_dir(self) -> Path:
+        return self.data_dir / "chroma"
+
     @classmethod
     def load(cls, data_dir: Path | None = None) -> Config:
         """Load config from disk, or return defaults if the file does not exist."""

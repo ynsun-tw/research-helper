@@ -34,18 +34,26 @@ class DiscussionRepository:
         *,
         metadata: dict[str, Any] | None = None,
         message_id: str | None = None,
+        idea_id: str | None = None,
     ) -> str:
         mid = message_id or str(uuid.uuid4())
         meta_json = json.dumps(metadata or {}, ensure_ascii=False)
         with self.db.conn:
             self.db.conn.execute(
                 """
-                INSERT INTO discussions (id, session_id, role, content, metadata)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO discussions (id, session_id, role, content, metadata, idea_id)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (mid, session_id, role, content, meta_json),
+                (mid, session_id, role, content, meta_json, idea_id),
             )
         return mid
+
+    def list_for_idea(self, idea_id: str) -> list[DiscussionMessage]:
+        rows = self.db.conn.execute(
+            "SELECT * FROM discussions WHERE idea_id = ? ORDER BY created_at",
+            (idea_id,),
+        ).fetchall()
+        return [_row_to_message(r) for r in rows]
 
     def list_session(self, session_id: str) -> list[DiscussionMessage]:
         rows = self.db.conn.execute(
