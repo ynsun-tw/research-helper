@@ -40,12 +40,25 @@
 - `research config show` 展示当前配置（脱敏显示 API key）
 - 配置文件权限自动设为 `600`
 - 缺少必要配置时给出友好错误提示
+- `research config set language en|zh` 控制 Agent 回复语言（默认 `en`）
 
 **Tasks**:
 - [x] T1.1.2.1 实现 `Config` Pydantic Settings 模型（api_key、model、data_dir 等字段）
 - [x] T1.1.2.2 实现 `config set/get/show` CLI 子命令
 - [x] T1.1.2.3 实现启动时配置校验，缺少 api_key 时引导用户配置
 - [x] T1.1.2.4 单元测试：配置读写、脱敏展示、校验逻辑
+- [x] T1.1.2.5 实现 `language` 配置（`en` / `zh`，注入 Analyst/Critic system prompt）
+
+---
+
+## M1 后增强（已交付，记入配置 Epic）
+
+| 功能 | 配置 / 命令 | 说明 |
+|------|-------------|------|
+| OpenRouter 网关 | `base_url`, `api_key`, `model` | 默认 OpenRouter；`sk-or-` key 自动对齐 base_url |
+| 回复语言 | `language`（`en` / `zh`） | `research config set language zh`；影响 read/discuss 输出 |
+
+详见 [notes.md](../notes.md) ADR-004、ADR-005 与 [architecture.md](../architecture.md) §4.1.1。
 
 ---
 

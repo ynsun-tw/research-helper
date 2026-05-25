@@ -17,7 +17,8 @@ alwaysApply: false
 ## Config
 
 - Path: `{data_dir}/config.yaml`, default `data_dir = ~/.research-agent`.
-- Keys: `api_key`, `model`, `base_url`, `app_title`, `app_url`, `data_dir`.
+- Keys: `api_key`, `model`, `language`, `base_url`, `app_title`, `app_url`, `data_dir`.
+- `language`: `en` (default) or `zh`; aliases `english`, `chinese`, `英文`, `中文`. Injected into agent system prompts.
 - Default backend: OpenRouter; `api_key` from https://openrouter.ai/keys .
 - Persist with PyYAML; load with `Config.load()` / save with `Config.save()`.
 - `config set <key> <value>` → `set_field` + save; `config show` masks `api_key`.

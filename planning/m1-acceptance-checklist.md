@@ -67,6 +67,7 @@ research config show
 | C-3 | `config show` 中 `base_url` | `https://openrouter.ai/api/v1`（OpenRouter key 时应自动对齐） | |
 | C-4 | 配置文件权限 | `ls -l ~/.research-agent/config.yaml` → `-rw-------` (600) | |
 | C-5 | 无 key 时 `research read` | 友好错误 + exit 1，提示配置 key | |
+| C-6 | `research config set language zh` | `config show` 显示 `zh`；`read`/`discuss` 输出为中文（可选抽查） | |
 
 ---
 

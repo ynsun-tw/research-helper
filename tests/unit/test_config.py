@@ -18,6 +18,7 @@ def test_load_returns_defaults_when_missing(config_dir: Path) -> None:
     assert cfg.model == "deepseek/deepseek-chat"
     assert "openrouter.ai" in cfg.base_url
     assert cfg.data_dir == config_dir
+    assert cfg.language == "en"
 
 
 def test_save_and_load_roundtrip(config_dir: Path) -> None:

@@ -22,6 +22,7 @@ research config set api_key <your-openrouter-key>
 
 # Default model: deepseek/deepseek-chat — change to any OpenRouter model id
 research config set model anthropic/claude-3.5-sonnet
+research config set language zh   # or: en (default), chinese, 中文
 
 research config show
 ```
@@ -35,6 +36,7 @@ Configuration is stored at `~/.research-agent/config.yaml` (file mode `600`).
 | `base_url` | `https://openrouter.ai/api/v1` | API base (change only if self-hosting a proxy) |
 | `app_title` | `Research Agent` | Sent as `X-Title` header to OpenRouter |
 | `app_url` | `https://github.com/research-agent` | Sent as `HTTP-Referer` header |
+| `language` | `en` | Agent reply language: `en` (English) or `zh` (简体中文) |
 
 ## Commands
 

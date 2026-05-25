@@ -8,6 +8,7 @@ from rich.table import Table
 
 from research_agent.cli_services import run_discuss, run_read
 from research_agent.config import Config, ConfigError
+from research_agent.core.language import language_label
 from research_agent.core.llm import LLMClient
 
 app = typer.Typer(
@@ -29,7 +30,7 @@ def _load_config() -> Config:
 def config_set(
     key: str = typer.Argument(
         ...,
-        help="Config key (api_key, model, base_url, app_title, app_url, data_dir)",
+        help="Config key (api_key, model, language, base_url, app_title, app_url, data_dir)",
     ),
     value: str = typer.Argument(..., help="Value to set"),
 ) -> None:
@@ -65,6 +66,7 @@ def config_show() -> None:
     table.add_column("Value")
     table.add_row("api_key", cfg.masked_api_key())
     table.add_row("model", cfg.model)
+    table.add_row("language", f"{cfg.language} ({language_label(cfg.language)})")
     table.add_row("base_url", cfg.base_url)
     table.add_row("app_title", cfg.app_title)
     table.add_row("app_url", cfg.app_url)

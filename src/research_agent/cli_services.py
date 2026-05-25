@@ -48,7 +48,7 @@ def run_read(
             progress.update(parse_task, description="[green]✓[/green] PDF parsed")
 
             analyze_task = progress.add_task("Analyzing (Analyst + Critic)…", total=None)
-            orch = Orchestrator(llm)
+            orch = Orchestrator(llm, language=cfg.language)
             report = asyncio.run(orch.analyze_paper_parallel(paper))
             progress.update(analyze_task, description="[green]✓[/green] Analysis complete")
 
@@ -82,7 +82,7 @@ def run_discuss(
     memory = WorkingMemory.new_session()
     db = Database(cfg.db_path)
     discussions = DiscussionRepository(db)
-    orch = Orchestrator(llm)
+    orch = Orchestrator(llm, language=cfg.language)
 
     console.print(
         Panel(

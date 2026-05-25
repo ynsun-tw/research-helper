@@ -10,6 +10,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from research_agent.core.language import DEFAULT_LANGUAGE, normalize_language
+
 DEFAULT_DATA_DIR = Path.home() / ".research-agent"
 CONFIG_FILENAME = "config.yaml"
 CONFIG_FILE_MODE = stat.S_IRUSR | stat.S_IWUSR  # 600
@@ -18,7 +20,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_DEFAULT_MODEL = "deepseek/deepseek-chat"
 
 KNOWN_KEYS = frozenset(
-    {"api_key", "model", "base_url", "data_dir", "app_title", "app_url"}
+    {"api_key", "model", "base_url", "data_dir", "app_title", "app_url", "language"}
 )
 
 
@@ -51,6 +53,7 @@ class Config(BaseModel):
     base_url: str = OPENROUTER_BASE_URL
     app_title: str = "Research Agent"
     app_url: str = "https://github.com/research-agent"
+    language: str = DEFAULT_LANGUAGE
     data_dir: Path = Field(default_factory=lambda: DEFAULT_DATA_DIR)
 
     @field_validator("api_key", mode="before")
@@ -66,6 +69,11 @@ class Config(BaseModel):
         if isinstance(value, str):
             return value.strip()
         return value
+
+    @field_validator("language", mode="before")
+    @classmethod
+    def _validate_language(cls, value: Any) -> str:
+        return normalize_language(value)
 
     @field_validator("data_dir", mode="before")
     @classmethod
@@ -118,6 +126,7 @@ class Config(BaseModel):
             "base_url": self.base_url,
             "app_title": self.app_title,
             "app_url": self.app_url,
+            "language": self.language,
             "data_dir": str(self.data_dir),
         }
         with self.config_path.open("w", encoding="utf-8") as f:
@@ -148,10 +157,15 @@ class Config(BaseModel):
             raise ConfigError(
                 f"Unknown config key '{key}'. Valid keys: {', '.join(sorted(KNOWN_KEYS))}"
             )
-        if key == "data_dir":
-            setattr(self, key, Path(value))
-        else:
-            setattr(self, key, value.strip() if isinstance(value, str) else value)
+        try:
+            if key == "data_dir":
+                setattr(self, key, Path(value))
+            elif key == "language":
+                setattr(self, key, normalize_language(value))
+            else:
+                setattr(self, key, value.strip() if isinstance(value, str) else value)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
         aligned = self.ensure_openrouter_alignment()
         if aligned.base_url != self.base_url:
             self.base_url = aligned.base_url

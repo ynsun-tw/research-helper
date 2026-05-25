@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from research_agent.agents.prompts import load_system_prompt
+from research_agent.core.language import DEFAULT_LANGUAGE, response_language_instruction
 from research_agent.core.llm import ChatMessage, LLMProvider
 
 
@@ -28,9 +29,17 @@ class BaseAgent(ABC):
 
     role: str = "agent"
 
-    def __init__(self, llm: LLMProvider, *, system_prompt: str | None = None) -> None:
+    def __init__(
+        self,
+        llm: LLMProvider,
+        *,
+        system_prompt: str | None = None,
+        language: str = DEFAULT_LANGUAGE,
+    ) -> None:
         self.llm = llm
-        self.system_prompt = system_prompt or load_system_prompt(self.prompt_name)
+        self.language = language
+        base = system_prompt or load_system_prompt(self.prompt_name)
+        self.system_prompt = f"{base}\n\n{response_language_instruction(language)}"
 
     @property
     @abstractmethod

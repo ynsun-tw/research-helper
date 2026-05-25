@@ -110,7 +110,7 @@ Scribe(生成) → parallel: [Analyst, Critic](审查) → Scribe(修改)
 
 ```
 ~/.research-agent/
-├── config.yaml              # 配置文件（API key、偏好）
+├── config.yaml              # 配置文件（API key、model、language、OpenRouter 等）
 ├── memory.db                # SQLite 主数据库
 │   ├── papers               # 论文元数据 + 分析结果
 │   ├── ideas                # Idea 生命周期记录
@@ -128,6 +128,19 @@ Scribe(生成) → parallel: [Analyst, Critic](审查) → Scribe(修改)
 │   └── fingerprint.json     # 写作风格指纹
 └── exports/                 # 导出报告
 ```
+
+### 4.1.1 `config.yaml` 字段
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `api_key` | — | OpenRouter API key（`sk-or-...`） |
+| `model` | `deepseek/deepseek-chat` | OpenRouter 模型 slug |
+| `base_url` | `https://openrouter.ai/api/v1` | LLM API 基址 |
+| `language` | `en` | Agent 回复语言：`en`（英文）或 `zh`（简体中文） |
+| `app_title` / `app_url` | 见代码默认值 | OpenRouter 推荐请求头 |
+| `data_dir` | `~/.research-agent` | 数据根目录 |
+
+`language` 通过 system prompt 后缀注入，影响 `read` / `discuss` 的 Analyst 与 Critic 输出语言（不改变 PDF 原文）。
 
 ### 4.2 SQLite 核心 Schema
 
@@ -202,7 +215,7 @@ CREATE TABLE discussions (
 | 语言 | Python 3.11+ | Go | AI 生态最完善，科研社区主力语言 |
 | CLI | Typer | Click, argparse | 基于类型注解，代码即文档 |
 | TUI | Textual | Rich+自定义 | 现代化 TUI 框架，组件丰富 |
-| LLM | DeepSeek API | OpenAI, Anthropic | 兼容 OpenAI 接口，长上下文，低成本 |
+| LLM | OpenRouter API | DeepSeek 直连, OpenAI | 默认经 OpenRouter；OpenAI SDK；可换任意兼容模型 |
 | 向量库 | ChromaDB | Qdrant, FAISS | 零配置，Python 原生，本地部署 |
 | 关系库 | SQLite + FTS5 | PostgreSQL | 零依赖，单文件，支持全文搜索 |
 | 图计算 | NetworkX | Neo4j | 引用图规模小（<10万节点），无需图DB |
@@ -222,6 +235,7 @@ research-bot/
 │       ├── __init__.py
 │       ├── cli.py               # Typer CLI 入口
 │       ├── config.py            # Pydantic Settings 配置
+│       ├── core/language.py     # 回复语言 en/zh 与 prompt 注入
 │       ├── agents/
 │       │   ├── __init__.py
 │       │   ├── base.py          # Agent 基类

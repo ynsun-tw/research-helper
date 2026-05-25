@@ -64,10 +64,21 @@
 - **原因**: 目标用户是个人研究者，零配置是关键；SQLite FTS5 满足全文搜索需求；数据量（<100万条记录）在 SQLite 能力范围内
 
 ### ADR-002: 选择 DeepSeek 而非 OpenAI 作为默认 LLM
-- **状态**: 已决定
+- **状态**: 已演进 → 见 ADR-005
 - **原因**: 兼容 OpenAI SDK（迁移成本低）；长上下文窗口（适合论文分析）；成本显著低于 GPT-4
 - **风险**: DeepSeek 可用性/政策风险，代码中通过 `LLMProvider` 抽象层隔离
 
 ### ADR-003: 优先 CLI 模式，TUI 为增强
 - **状态**: 已决定
 - **原因**: CLI 模式可脚本化、可管道化；TUI 需要更多开发资源；MVP 不依赖 TUI
+
+### ADR-004: Agent 回复语言可配置（`language`）
+- **状态**: 已决定（M1 后增强，2026-05）
+- **原因**: 中英文用户均需可读的双视角分析；配置项优于每次在 prompt 里说明
+- **实现**: `config.yaml` 的 `language`（`en` | `zh`，默认 `en`）；`core/language.py` 向 Analyst/Critic system prompt 追加语言指令
+- **范围**: 仅 Agent 生成内容；CLI 界面与 PDF 原文语言不变
+
+### ADR-005: 默认 LLM 网关改为 OpenRouter
+- **状态**: 已决定（M1 后增强，2026-05）
+- **原因**: 单 key 切换多模型；与 OpenAI SDK 兼容；`sk-or-` key 与 `provider/model` slug 对齐
+- **实现**: `base_url` 默认 `https://openrouter.ai/api/v1`；`api_key` 与 `base_url` 不一致时自动迁移

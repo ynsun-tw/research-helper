@@ -9,6 +9,7 @@ from typing import Any
 from research_agent.agents.analyst import AnalysisResult, Analyst
 from research_agent.agents.base import AgentResponse
 from research_agent.agents.critic import Critic, CritiqueResult
+from research_agent.core.language import DEFAULT_LANGUAGE
 from research_agent.core.llm import LLMProvider
 from research_agent.core.paper import Paper, Section
 from research_agent.memory.working_memory import DEFAULT_MAX_CONTEXT_TOKENS, WorkingMemory
@@ -55,10 +56,11 @@ class AggregatedAnalysis:
 class Orchestrator:
     """Routes user commands and coordinates multi-agent workflows."""
 
-    def __init__(self, llm: LLMProvider) -> None:
+    def __init__(self, llm: LLMProvider, *, language: str = DEFAULT_LANGUAGE) -> None:
         self.llm = llm
-        self.analyst = Analyst(llm)
-        self.critic = Critic(llm)
+        self.language = language
+        self.analyst = Analyst(llm, language=language)
+        self.critic = Critic(llm, language=language)
 
     def route(self, command: str, context: dict[str, Any] | None = None) -> Task:
         """Map a command string to a :class:`Task`."""
