@@ -85,6 +85,7 @@
 
 ## Epic E1.3 — 核心 Agent 系统
 
+> Status: **DONE**
 > 价值假设：Analyst + Critic 双视角是产品的核心差异化能力
 
 ### Story S1.3.1 — LLM 客户端封装
@@ -96,10 +97,10 @@
 - 测试时可注入 mock LLM
 
 **Tasks**:
-- [ ] T1.3.1.1 实现 `LLMClient`（openai SDK，base_url 指向 DeepSeek）
-- [ ] T1.3.1.2 实现流式输出支持
-- [ ] T1.3.1.3 实现重试逻辑（指数退避，最多 3 次）
-- [ ] T1.3.1.4 定义 `LLMProvider` 抽象接口，便于后续切换模型
+- [x] T1.3.1.1 实现 `LLMClient`（openai SDK，base_url 指向 DeepSeek）
+- [x] T1.3.1.2 实现流式输出支持
+- [x] T1.3.1.3 实现重试逻辑（指数退避，最多 3 次）
+- [x] T1.3.1.4 定义 `LLMProvider` 抽象接口，便于后续切换模型
 
 ### Story S1.3.2 — Agent 基类
 
@@ -109,9 +110,9 @@
 - 所有 Agent 都有独立的 System Prompt
 
 **Tasks**:
-- [ ] T1.3.2.1 定义 `AgentResponse` dataclass
-- [ ] T1.3.2.2 实现 `BaseAgent`（持有 LLMClient，定义 `run` 抽象方法）
-- [ ] T1.3.2.3 实现 Agent System Prompt 加载机制（从 `prompts/` 目录读取 YAML）
+- [x] T1.3.2.1 定义 `AgentResponse` dataclass
+- [x] T1.3.2.2 实现 `BaseAgent`（持有 LLMClient，定义 `run` 抽象方法）
+- [x] T1.3.2.3 实现 Agent System Prompt 加载机制（从 `prompts/` 目录读取 YAML）
 
 ### Story S1.3.3 — Analyst Agent
 
@@ -121,10 +122,10 @@
 - 单次分析 < 60s（含 LLM 调用）
 
 **Tasks**:
-- [ ] T1.3.3.1 设计并写入 Analyst System Prompt（角色：好奇心驱动，天然发现价值）
-- [ ] T1.3.3.2 实现 `Analyst.analyze_paper(paper) → AnalysisResult`
-- [ ] T1.3.3.3 定义 `AnalysisResult` schema（贡献列表、洞察、关联、置信度）
-- [ ] T1.3.3.4 集成测试：对真实论文运行分析，人工验证输出质量
+- [x] T1.3.3.1 设计并写入 Analyst System Prompt（角色：好奇心驱动，天然发现价值）
+- [x] T1.3.3.2 实现 `Analyst.analyze_paper(paper) → AnalysisResult`
+- [x] T1.3.3.3 定义 `AnalysisResult` schema（贡献列表、洞察、关联、置信度）
+- [x] T1.3.3.4 集成测试：对真实论文运行分析，人工验证输出质量
 
 ### Story S1.3.4 — Critic Agent
 
@@ -135,11 +136,11 @@
 - 即使找不到反对点也要诚实说明（而非强行反对）
 
 **Tasks**:
-- [ ] T1.3.4.1 设计并写入 Critic System Prompt（角色：魔鬼代言人，评分规则约束）
-- [ ] T1.3.4.2 实现 `Critic.critique_paper(paper) → CritiqueResult`
-- [ ] T1.3.4.3 定义 `CritiqueResult` schema（反对点列表、支持度评分、理由）
-- [ ] T1.3.4.4 实现评分解析：从 LLM 输出中稳定提取数字评分
-- [ ] T1.3.4.5 集成测试：验证评分范围、反对点非空
+- [x] T1.3.4.1 设计并写入 Critic System Prompt（角色：魔鬼代言人，评分规则约束）
+- [x] T1.3.4.2 实现 `Critic.critique_paper(paper) → CritiqueResult`
+- [x] T1.3.4.3 定义 `CritiqueResult` schema（反对点列表、支持度评分、理由）
+- [x] T1.3.4.4 实现评分解析：从 LLM 输出中稳定提取数字评分
+- [x] T1.3.4.5 集成测试：验证评分范围、反对点非空
 
 ### Story S1.3.5 — Orchestrator 基础版
 
@@ -149,10 +150,10 @@
 - 聚合输出，明确标注共识点和冲突点
 
 **Tasks**:
-- [ ] T1.3.5.1 实现 `Orchestrator.route(command, context) → Task`
-- [ ] T1.3.5.2 实现并行 Agent 调用（asyncio.gather）
-- [ ] T1.3.5.3 实现结果聚合：提取 Analyst/Critic 共识 + 分歧
-- [ ] T1.3.5.4 集成测试：端到端论文分析流程
+- [x] T1.3.5.1 实现 `Orchestrator.route(command, context) → Task`
+- [x] T1.3.5.2 实现并行 Agent 调用（asyncio.gather）
+- [x] T1.3.5.3 实现结果聚合：提取 Analyst/Critic 共识 + 分歧
+- [x] T1.3.5.4 集成测试：端到端论文分析流程
 
 ---
 
@@ -177,6 +178,7 @@
 
 ## Epic E1.5 — CLI 命令接口
 
+> Status: **DONE**
 > 价值假设：完整的 CLI 接口让用户可以立即使用 MVP
 
 ### Story S1.5.1 — `research read` 命令
@@ -188,10 +190,10 @@
 - 进度指示器显示下载/分析状态
 
 **Tasks**:
-- [ ] T1.5.1.1 实现 `read` CLI 命令（支持 arxiv ID 和文件路径）
-- [ ] T1.5.1.2 实现格式化输出（Rich 渲染，带颜色分区）
-- [ ] T1.5.1.3 实现进度条（下载 → 解析 → 分析 → 输出）
-- [ ] T1.5.1.4 E2E 测试：`research read arxiv:xxx` 完整流程
+- [x] T1.5.1.1 实现 `read` CLI 命令（支持 arxiv ID 和文件路径）
+- [x] T1.5.1.2 实现格式化输出（Rich 渲染，带颜色分区）
+- [x] T1.5.1.3 实现进度条（下载 → 解析 → 分析 → 输出）
+- [x] T1.5.1.4 E2E 测试：`research read arxiv:xxx` 完整流程
 
 ### Story S1.5.2 — `research discuss` 命令
 
@@ -202,6 +204,6 @@
 - 退出时自动保存对话记录
 
 **Tasks**:
-- [ ] T1.5.2.1 实现 `discuss` CLI 命令（REPL 循环）
-- [ ] T1.5.2.2 实现对话轮次：用户输入 → Orchestrator 路由 → 双视角回复
-- [ ] T1.5.2.3 实现退出处理和对话持久化
+- [x] T1.5.2.1 实现 `discuss` CLI 命令（REPL 循环）
+- [x] T1.5.2.2 实现对话轮次：用户输入 → Orchestrator 路由 → 双视角回复
+- [x] T1.5.2.3 实现退出处理和对话持久化

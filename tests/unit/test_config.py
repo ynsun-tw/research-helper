@@ -15,7 +15,8 @@ from research_agent.config import CONFIG_FILE_MODE, Config, ConfigError
 def test_load_returns_defaults_when_missing(config_dir: Path) -> None:
     cfg = Config.load(config_dir)
     assert cfg.api_key is None
-    assert cfg.model == "deepseek-chat"
+    assert cfg.model == "deepseek/deepseek-chat"
+    assert "openrouter.ai" in cfg.base_url
     assert cfg.data_dir == config_dir
 
 
@@ -24,7 +25,7 @@ def test_save_and_load_roundtrip(config_dir: Path) -> None:
     cfg.save()
     loaded = Config.load(config_dir)
     assert loaded.api_key == "sk-test-secret-key-12345"
-    assert loaded.model == "deepseek-chat"
+    assert loaded.model == "deepseek/deepseek-chat"
 
 
 def test_config_file_mode_is_600(config_dir: Path) -> None:
@@ -72,10 +73,10 @@ def test_set_field_unknown_key(config_dir: Path) -> None:
 def test_set_field_persists(config_dir: Path) -> None:
     cfg = Config(data_dir=config_dir)
     cfg.set_field("api_key", "sk-xxx")
-    cfg.set_field("model", "deepseek-reasoner")
+    cfg.set_field("model", "anthropic/claude-3.5-sonnet")
     loaded = Config.load(config_dir)
     assert loaded.api_key == "sk-xxx"
-    assert loaded.model == "deepseek-reasoner"
+    assert loaded.model == "anthropic/claude-3.5-sonnet"
 
 
 def test_get_field_masks_api_key(config_dir: Path) -> None:

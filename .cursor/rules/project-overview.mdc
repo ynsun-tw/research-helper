@@ -13,8 +13,10 @@ Local-first Python 3.11+ CLI (`research`) for paper understanding with multi-age
 |--------|------|----------------|
 | `cli.py` | E1.1/E1.5 | Typer commands |
 | `config.py` | E1.1 | `~/.research-agent/config.yaml` |
-| `agents/` | E1.3+ | Orchestrator, Analyst, Critic, Searcher, Scribe, MemoryKeeper |
-| `core/` | E1.2/E1.3 | LLM client, Paper, Idea entities |
+| `agents/` | E1.3 | Orchestrator, Analyst, Critic (+ E3+ Searcher, E4 Scribe, E3 MemoryKeeper) |
+| `core/llm.py` | E1.3 | LLMProvider, LLMClient, MockLLMProvider |
+| `prompts/` | E1.3 | Analyst/Critic system prompts (YAML) |
+| `core/` | E1.2/E1.3 | Paper, loader; Idea (E2) |
 | `parsers/` | E1.2 | PyMuPDF PDF parsing |
 | `storage/` | E1.2/E1.4 | SQLite + ChromaDB |
 | `search/` | E1.2/E3.1 | arXiv, Semantic Scholar, GitHub |
@@ -23,7 +25,7 @@ Local-first Python 3.11+ CLI (`research`) for paper understanding with multi-age
 ## Constraints
 
 - Data stays under `~/.research-agent/` (config, SQLite, Chroma, PDF cache).
-- Default LLM: DeepSeek via OpenAI-compatible SDK; abstract behind `LLMProvider` when adding providers.
+- Default LLM: OpenRouter (`https://openrouter.ai/api/v1`) via OpenAI SDK; model slug e.g. `deepseek/deepseek-chat`. Abstract behind `LLMProvider`.
 - Critic: never score 10; score &lt; 7 must include reasons.
 - Implement only the current epic scope; stub files are placeholders — do not flesh out future epics early.
 

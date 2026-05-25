@@ -164,6 +164,26 @@ class PaperRepository:
             cur = self.db.conn.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
         return cur.rowcount > 0
 
+    def save_analysis_notes(
+        self,
+        paper_id: str,
+        *,
+        analyst_notes: dict[str, object] | None = None,
+        critic_notes: dict[str, object] | None = None,
+    ) -> None:
+        """Persist serialized Analyst/Critic results on the paper row."""
+        with self.db.conn:
+            if analyst_notes is not None:
+                self.db.conn.execute(
+                    "UPDATE papers SET analyst_notes = ? WHERE id = ?",
+                    (json.dumps(analyst_notes, ensure_ascii=False), paper_id),
+                )
+            if critic_notes is not None:
+                self.db.conn.execute(
+                    "UPDATE papers SET critic_notes = ? WHERE id = ?",
+                    (json.dumps(critic_notes, ensure_ascii=False), paper_id),
+                )
+
 
 def _row_to_paper(row: sqlite3.Row) -> Paper:
     sections_raw = row["sections_json"]

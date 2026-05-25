@@ -1,0 +1,29 @@
+---
+description: Multi-agent conventions (Analyst, Critic, Orchestrator)
+globs: src/research_agent/agents/**/*.py
+alwaysApply: false
+---
+
+# Agent Conventions
+
+## Architecture
+
+- All agents extend `BaseAgent`; entry point is `run(context) -> AgentResponse`.
+- System prompts live in `src/research_agent/prompts/<name>.yaml` (`system` key).
+- LLM access only via `LLMProvider` — inject `MockLLMProvider` in tests.
+
+## Critic rules (product)
+
+- `support_score` is 1–9 only; `normalize_score` clamps 10 → 9.
+- Score &lt; 7 must have non-empty `score_reason`.
+- Honest when no objections (`honesty_note`), do not fabricate flaws.
+
+## Orchestrator
+
+- Paper analysis: `asyncio.gather` on Analyst + Critic via `asyncio.to_thread`.
+- Aggregate with explicit `consensus` and `conflicts` lists in `AggregatedAnalysis`.
+
+## LLM output
+
+- Prompts require JSON-only replies; parse with `extract_json()` in `base.py`.
+- On parse failure, raise `ValueError` — callers map to user-friendly errors.

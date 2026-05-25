@@ -46,3 +46,9 @@ def test_read_without_api_key(config_dir: Path, monkeypatch: pytest.MonkeyPatch)
     result = runner.invoke(app, ["read", "arxiv:2301.12345"])
     assert result.exit_code == 1
     assert "API key" in result.stdout
+
+
+def test_read_help_documents_source() -> None:
+    result = runner.invoke(app, ["read", "--help"])
+    assert result.exit_code == 0
+    assert "arxiv" in result.stdout.lower()

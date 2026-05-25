@@ -1,0 +1,30 @@
+---
+description: CLI command and Rich output conventions
+globs: "{src/research_agent/cli.py,src/research_agent/cli_services.py,src/research_agent/ui/**/*.py}"
+alwaysApply: false
+---
+
+# CLI Conventions
+
+## Layering
+
+- `cli.py` — Typer wiring only (args, `_ensure_api_key`, exit codes).
+- `cli_services.py` — testable command logic (`run_read`, `run_discuss`).
+- `ui/formatting.py` — Rich panels/markdown; no business logic.
+
+## `research read`
+
+1. `load_paper` → `Orchestrator.analyze_paper_parallel` → persist → render.
+2. Progress steps: Load → Parse → Analyze → Save (Rich `Progress` + spinner).
+3. Persist paper + `analyst_notes` / `critic_notes` JSON on `papers` row.
+
+## `research discuss`
+
+- REPL until `exit`/`quit`/Ctrl+C; each turn calls `discuss_turn_async`.
+- Append messages to `discussions` table via `DiscussionRepository`.
+- Optional `--topic` runs an opening turn before the prompt loop.
+
+## Errors
+
+- Map `PaperLoadError`, `LLMError`, `ValueError` to `[red]Error:[/red]` messages.
+- Never print raw API stack traces for expected failures.

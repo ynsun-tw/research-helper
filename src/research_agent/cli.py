@@ -6,7 +6,9 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from research_agent.cli_services import run_discuss, run_read
 from research_agent.config import Config, ConfigError
+from research_agent.core.llm import LLMClient
 
 app = typer.Typer(
     name="research",
@@ -25,7 +27,10 @@ def _load_config() -> Config:
 
 @config_app.command("set")
 def config_set(
-    key: str = typer.Argument(..., help="Config key (api_key, model, base_url, data_dir)"),
+    key: str = typer.Argument(
+        ...,
+        help="Config key (api_key, model, base_url, app_title, app_url, data_dir)",
+    ),
     value: str = typer.Argument(..., help="Value to set"),
 ) -> None:
     """Save a configuration value to ~/.research-agent/config.yaml."""
@@ -61,6 +66,8 @@ def config_show() -> None:
     table.add_row("api_key", cfg.masked_api_key())
     table.add_row("model", cfg.model)
     table.add_row("base_url", cfg.base_url)
+    table.add_row("app_title", cfg.app_title)
+    table.add_row("app_url", cfg.app_url)
     table.add_row("data_dir", str(cfg.data_dir))
     table.add_row("config_path", str(cfg.config_path))
     console.print(table)
@@ -73,27 +80,30 @@ def read(
         help="Paper source: arxiv:ID (e.g. arxiv:2301.12345) or local PDF path",
     ),
 ) -> None:
-    """Analyze a paper with Analyst + Critic dual perspectives. (Coming in E1.5)"""
-    _ensure_api_key()
-    console.print(
-        f"[yellow]Not implemented yet.[/yellow] Would analyze: {source}\n"
-        "See Epic E1.5 in planning/milestones/m1-paper-understanding.md"
-    )
-    raise typer.Exit(code=0)
+    """Analyze a paper with Analyst + Critic dual perspectives."""
+    cfg = _ensure_api_key()
+    llm = LLMClient.from_config(cfg)
+    code = run_read(source, cfg, llm, console)
+    raise typer.Exit(code=code)
 
 
 @app.command()
-def discuss() -> None:
-    """Start an interactive critical discussion session. (Coming in E1.5)"""
-    _ensure_api_key()
-    console.print(
-        "[yellow]Not implemented yet.[/yellow] Interactive discuss mode.\n"
-        "See Epic E1.5 in planning/milestones/m1-paper-understanding.md"
-    )
-    raise typer.Exit(code=0)
+def discuss(
+    topic: str | None = typer.Option(
+        None,
+        "--topic",
+        "-t",
+        help="Optional opening topic for the discussion",
+    ),
+) -> None:
+    """Start an interactive critical discussion (Analyst + Critic each turn)."""
+    cfg = _ensure_api_key()
+    llm = LLMClient.from_config(cfg)
+    code = run_discuss(cfg, llm, console, opening_topic=topic)
+    raise typer.Exit(code=code)
 
 
-def _ensure_api_key() -> None:
+def _ensure_api_key() -> Config:
     """Validate API key before commands that need LLM access."""
     cfg = _load_config()
     try:
@@ -101,6 +111,7 @@ def _ensure_api_key() -> None:
     except ConfigError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+    return cfg
 
 
 def main() -> None:

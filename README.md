@@ -14,12 +14,27 @@ pip install -e ".[dev]"
 
 ## Configure
 
+LLM requests go through [OpenRouter](https://openrouter.ai/) (OpenAI-compatible API).
+
 ```bash
-research config set api_key <your-deepseek-key>
+# API key from https://openrouter.ai/keys
+research config set api_key <your-openrouter-key>
+
+# Default model: deepseek/deepseek-chat — change to any OpenRouter model id
+research config set model anthropic/claude-3.5-sonnet
+
 research config show
 ```
 
 Configuration is stored at `~/.research-agent/config.yaml` (file mode `600`).
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `api_key` | — | OpenRouter API key |
+| `model` | `deepseek/deepseek-chat` | Model slug on OpenRouter |
+| `base_url` | `https://openrouter.ai/api/v1` | API base (change only if self-hosting a proxy) |
+| `app_title` | `Research Agent` | Sent as `X-Title` header to OpenRouter |
+| `app_url` | `https://github.com/research-agent` | Sent as `HTTP-Referer` header |
 
 ## Commands
 
