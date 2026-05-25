@@ -70,4 +70,17 @@ def test_run_discuss_one_turn_and_exit(config_dir) -> None:
 
     code = run_discuss(cfg, llm, console, input_fn=lambda _: next(inputs))
     assert code == 0
-    assert "Session saved" in console.file.getvalue()
+    out = console.file.getvalue()
+    assert "Session saved" in out
+    assert "message(s)" in out
+
+    from research_agent.storage.database import Database
+    from research_agent.storage.discussions import DiscussionRepository
+
+    db = Database(cfg.db_path)
+    repo = DiscussionRepository(db)
+    row = db.conn.execute("SELECT session_id FROM discussions LIMIT 1").fetchone()
+    assert row is not None
+    messages = repo.list_session(row["session_id"])
+    assert len(messages) == 3  # user + analyst + critic
+    db.close()

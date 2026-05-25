@@ -11,6 +11,7 @@ from research_agent.agents.base import AgentResponse
 from research_agent.agents.critic import Critic, CritiqueResult
 from research_agent.core.llm import LLMProvider
 from research_agent.core.paper import Paper, Section
+from research_agent.memory.working_memory import DEFAULT_MAX_CONTEXT_TOKENS, WorkingMemory
 
 
 @dataclass(slots=True)
@@ -73,9 +74,11 @@ class Orchestrator:
         if task.command == "read_paper":
             return await self.analyze_paper_parallel(task.context["paper"])
         if task.command == "discuss_idea":
-            message = str(task.context.get("message", ""))
-            history = task.context.get("history") or []
-            a, c = await self.discuss_turn_async(message, history)
+            memory = task.context.get("memory")
+            if not isinstance(memory, WorkingMemory):
+                raise TypeError("context['memory'] must be a WorkingMemory instance")
+            max_tokens = int(task.context.get("max_context_tokens", DEFAULT_MAX_CONTEXT_TOKENS))
+            a, c = await self.discuss_turn_async(memory, max_context_tokens=max_tokens)
             return {"analyst": a, "critic": c}
         return {"command": task.command, "status": "not_implemented"}
 
@@ -103,11 +106,12 @@ class Orchestrator:
 
     async def discuss_turn_async(
         self,
-        message: str,
-        history: list[tuple[str, str]],
+        memory: WorkingMemory,
+        *,
+        max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
     ) -> tuple[AgentResponse, AgentResponse]:
-        """Run Analyst + Critic on a discuss turn (reuses paper analysis pipeline)."""
-        paper = _paper_from_discussion(message, history)
+        """Run Analyst + Critic using truncated session context from working memory."""
+        paper = _paper_from_memory(memory, max_context_tokens=max_context_tokens)
         analyst_resp, critic_resp = await asyncio.gather(
             asyncio.to_thread(self.analyst.run, {"paper": paper}),
             asyncio.to_thread(self.critic.run, {"paper": paper}),
@@ -115,21 +119,19 @@ class Orchestrator:
         return analyst_resp, critic_resp
 
 
-def _paper_from_discussion(message: str, history: list[tuple[str, str]]) -> Paper:
+def _paper_from_memory(memory: WorkingMemory, *, max_context_tokens: int) -> Paper:
     """Build a synthetic Paper so discuss can reuse analyze/critique prompts."""
-    transcript_lines = [f"{role}: {content}" for role, content in history[-12:]]
-    transcript_lines.append(f"user: {message}")
-    transcript = "\n".join(transcript_lines)
+    transcript = memory.to_context(max_context_tokens)
+    last_user = ""
+    for msg in reversed(memory.messages):
+        if msg.role == "user":
+            last_user = msg.content
+            break
     return Paper(
-        id="session:discuss",
+        id=f"session:{memory.session_id}",
         title="Research discussion",
-        abstract=message,
-        sections=[
-            Section(
-                title="Conversation",
-                content=transcript,
-            )
-        ],
+        abstract=last_user,
+        sections=[Section(title="Conversation", content=transcript)],
         full_text=transcript,
     )
 

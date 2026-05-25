@@ -16,6 +16,7 @@ Local-first Python 3.11+ CLI (`research`) for paper understanding with multi-age
 | `agents/` | E1.3 | Orchestrator, Analyst, Critic (+ E3+ Searcher, E4 Scribe, E3 MemoryKeeper) |
 | `core/llm.py` | E1.3 | LLMProvider, LLMClient, MockLLMProvider |
 | `prompts/` | E1.3 | Analyst/Critic system prompts (YAML) |
+| `memory/` | E1.4 | WorkingMemory (session transcript + token truncation) |
 | `core/` | E1.2/E1.3 | Paper, loader; Idea (E2) |
 | `parsers/` | E1.2 | PyMuPDF PDF parsing |
 | `storage/` | E1.2/E1.4 | SQLite + ChromaDB |

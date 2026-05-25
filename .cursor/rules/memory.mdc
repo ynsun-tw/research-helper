@@ -1,0 +1,24 @@
+---
+description: Working memory and session context conventions
+globs: src/research_agent/memory/**/*.py
+alwaysApply: false
+---
+
+# Memory Conventions (E1.4)
+
+## WorkingMemory
+
+- In-process transcript for the current CLI session (`session_id` + `messages`).
+- `to_context(max_tokens)` keeps **newest** lines first; drops oldest when over budget.
+- Token estimate: `len(text) // 4` (no tiktoken in MVP).
+
+## Persistence
+
+- `persist(repo)` flushes only messages not yet in SQLite (idempotent).
+- `research discuss` saves the full session on exit via `memory.persist()`.
+- Restore with `WorkingMemory.from_session(repo, session_id)`.
+
+## Orchestrator
+
+- `discuss_turn_async(memory, max_context_tokens=...)` builds a synthetic `Paper`
+  from `memory.to_context()` — do not pass raw `list[tuple]` history.

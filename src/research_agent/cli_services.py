@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from collections.abc import Callable
-from dataclasses import asdict
 
 from rich.console import Console
 from rich.panel import Panel
@@ -18,6 +16,7 @@ from research_agent.config import Config
 from research_agent.core.llm import LLMError, LLMProvider
 from research_agent.core.loader import PaperLoadError, load_paper
 from research_agent.core.paper import Paper
+from research_agent.memory.working_memory import DEFAULT_MAX_CONTEXT_TOKENS, WorkingMemory
 from research_agent.storage.database import Database, PaperRepository
 from research_agent.storage.discussions import DiscussionRepository
 from research_agent.ui.formatting import render_discuss_turn, render_read_report
@@ -74,13 +73,15 @@ def run_discuss(
     *,
     opening_topic: str | None = None,
     input_fn: Callable[[str], str] | None = None,
+    max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
 ) -> int:
-    """Interactive REPL with dual-agent replies; persists on exit."""
+    """Interactive REPL with dual-agent replies; persists session on exit."""
     if input_fn is None:
         input_fn = console.input
-    session_id = str(uuid.uuid4())
-    history: list[tuple[str, str]] = []
-    discussions = DiscussionRepository(Database(cfg.db_path))
+
+    memory = WorkingMemory.new_session()
+    db = Database(cfg.db_path)
+    discussions = DiscussionRepository(db)
     orch = Orchestrator(llm)
 
     console.print(
@@ -96,11 +97,10 @@ def run_discuss(
         if opening_topic:
             code = _handle_discuss_turn(
                 opening_topic,
-                history,
-                discussions,
-                session_id,
+                memory,
                 orch,
                 console,
+                max_context_tokens=max_context_tokens,
             )
             if code != 0:
                 return code
@@ -119,51 +119,50 @@ def run_discuss(
 
             code = _handle_discuss_turn(
                 user_input,
-                history,
-                discussions,
-                session_id,
+                memory,
                 orch,
                 console,
+                max_context_tokens=max_context_tokens,
             )
             if code != 0:
                 return code
 
     finally:
-        discussions.db.close()
-        n = len([h for h in history if h[0] == "user"])
-        console.print(f"[green]✓[/green] Session saved ({n} turn(s), id={session_id[:8]}…)")
+        saved = memory.persist(discussions)
+        db.close()
+        console.print(
+            f"[green]✓[/green] Session saved "
+            f"({memory.turn_count()} turn(s), {saved} message(s), id={memory.session_id[:8]}…)"
+        )
     return 0
 
 
 def _handle_discuss_turn(
     user_input: str,
-    history: list[tuple[str, str]],
-    discussions: DiscussionRepository,
-    session_id: str,
+    memory: WorkingMemory,
     orch: Orchestrator,
     console: Console,
+    *,
+    max_context_tokens: int,
 ) -> int:
-    history.append(("user", user_input))
-    discussions.append(session_id, "user", user_input)
+    memory.append("user", user_input)
     try:
         with console.status("[bold]Thinking…[/bold] (Analyst + Critic)"):
             analyst, critic = asyncio.run(
-                orch.discuss_turn_async(user_input, history[:-1])
+                orch.discuss_turn_async(memory, max_context_tokens=max_context_tokens)
             )
     except LLMError as exc:
         console.print(f"[red]Error:[/red] {exc}")
-        history.pop()
+        memory.messages.pop()
         return 0
     except (ValueError, KeyError, TypeError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
-        history.pop()
+        memory.messages.pop()
         return 0
 
     render_discuss_turn(console, analyst, critic)
-    history.append(("analyst", analyst.content))
-    history.append(("critic", critic.content))
-    discussions.append(session_id, "analyst", analyst.content)
-    discussions.append(session_id, "critic", critic.content)
+    memory.append("analyst", analyst.content)
+    memory.append("critic", critic.content)
     return 0
 
 
@@ -182,6 +181,8 @@ def _persist_read_results(cfg: Config, paper: Paper, report: AggregatedAnalysis)
 
 
 def _analysis_to_dict(result: AnalysisResult) -> dict[str, object]:
+    from dataclasses import asdict
+
     data = asdict(result)
     data["claimed_vs_evidence"] = [
         {"claim": p.claim, "evidence": p.evidence} for p in result.claimed_vs_evidence
@@ -190,4 +191,6 @@ def _analysis_to_dict(result: AnalysisResult) -> dict[str, object]:
 
 
 def _critique_to_dict(result: CritiqueResult) -> dict[str, object]:
+    from dataclasses import asdict
+
     return asdict(result)

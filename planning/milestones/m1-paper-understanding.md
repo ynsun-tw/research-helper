@@ -159,6 +159,7 @@
 
 ## Epic E1.4 — 基础记忆系统
 
+> Status: **DONE**
 > 价值假设：会话内记忆使对话连贯，是 Idea 讨论的前提
 
 ### Story S1.4.1 — 工作记忆（会话内）
@@ -169,10 +170,10 @@
 - 会话结束后自动持久化到 SQLite
 
 **Tasks**:
-- [ ] T1.4.1.1 实现 `WorkingMemory`：持有当前会话消息列表
-- [ ] T1.4.1.2 实现 `WorkingMemory.to_context(max_tokens)`：截断到指定 token 限制
-- [ ] T1.4.1.3 实现会话自动保存到 `discussions` 表
-- [ ] T1.4.1.4 单元测试：token 截断逻辑、持久化
+- [x] T1.4.1.1 实现 `WorkingMemory`：持有当前会话消息列表
+- [x] T1.4.1.2 实现 `WorkingMemory.to_context(max_tokens)`：截断到指定 token 限制
+- [x] T1.4.1.3 实现会话自动保存到 `discussions` 表
+- [x] T1.4.1.4 单元测试：token 截断逻辑、持久化
 
 ---
 
