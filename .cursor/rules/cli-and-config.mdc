@@ -1,0 +1,33 @@
+---
+description: CLI and configuration conventions
+globs: "{src/research_agent/cli.py,src/research_agent/config.py}"
+alwaysApply: false
+---
+
+# CLI & Config Conventions
+
+## CLI (Typer)
+
+- Entry: `research_agent.cli:app` via `[project.scripts] research`.
+- Top-level: `read`, `discuss`, `config` (sub-typer).
+- Commands needing LLM call `_ensure_api_key()` → `Config.require_api_key()`.
+- User-facing output: `rich.console.Console`; tables for structured config display.
+- Placeholder commands: print clear "not implemented" + epic reference, exit 0 only when stub is informational.
+
+## Config
+
+- Path: `{data_dir}/config.yaml`, default `data_dir = ~/.research-agent`.
+- Keys: `api_key`, `model`, `base_url`, `data_dir`.
+- Persist with PyYAML; load with `Config.load()` / save with `Config.save()`.
+- `config set <key> <value>` → `set_field` + save; `config show` masks `api_key`.
+
+```python
+# ✅ Missing API key message
+"API key is not configured. Run: research config set api_key <your-key>"
+```
+
+## Adding a new config key
+
+1. Add field to `Config` model + `KNOWN_KEYS`.
+2. Update `save()` payload and `config show` table.
+3. Add unit tests in `tests/unit/test_config.py`.

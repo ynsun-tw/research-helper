@@ -1,0 +1,36 @@
+---
+description: Test conventions for Research Agent
+globs: tests/**/*.py
+alwaysApply: false
+---
+
+# Testing Standards
+
+## Layout
+
+- `tests/unit/` — fast, isolated (config, parsers, agents with mocks).
+- `tests/integration/` — SQLite, vector store, multi-module.
+- `tests/e2e/` — full `research` CLI flows (mark `@pytest.mark.e2e` when added).
+
+## Practices
+
+```python
+# ✅ Isolate filesystem — never touch ~/.research-agent in tests
+@pytest.fixture
+def config_dir(tmp_path: Path) -> Path:
+    return tmp_path / "research-agent"
+
+cfg = Config.load(config_dir)
+```
+
+- Mock LLM at `LLMClient` boundary; inject fakes, do not call DeepSeek in unit tests.
+- CLI tests: `typer.testing.CliRunner` + `monkeypatch` on `_load_config` for temp dirs.
+- One behavior per test; descriptive names: `test_masked_api_key_redacts_long_key`.
+
+## Commands
+
+```bash
+pytest
+pytest tests/unit -v
+ruff check src tests && mypy src
+```

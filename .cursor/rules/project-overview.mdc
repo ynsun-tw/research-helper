@@ -1,0 +1,32 @@
+---
+description: Research Agent project context, layout, and epic boundaries
+alwaysApply: true
+---
+
+# Research Agent — Project Context
+
+Local-first Python 3.11+ CLI (`research`) for paper understanding with multi-agent Analyst + Critic.
+
+## Package layout (`src/research_agent/`)
+
+| Module | Epic | Responsibility |
+|--------|------|----------------|
+| `cli.py` | E1.1/E1.5 | Typer commands |
+| `config.py` | E1.1 | `~/.research-agent/config.yaml` |
+| `agents/` | E1.3+ | Orchestrator, Analyst, Critic, Searcher, Scribe, MemoryKeeper |
+| `core/` | E1.2/E1.3 | LLM client, Paper, Idea entities |
+| `parsers/` | E1.2 | PyMuPDF PDF parsing |
+| `storage/` | E1.2/E1.4 | SQLite + ChromaDB |
+| `search/` | E1.2/E3.1 | arXiv, Semantic Scholar, GitHub |
+| `ui/` | E5.2 | Textual TUI |
+
+## Constraints
+
+- Data stays under `~/.research-agent/` (config, SQLite, Chroma, PDF cache).
+- Default LLM: DeepSeek via OpenAI-compatible SDK; abstract behind `LLMProvider` when adding providers.
+- Critic: never score 10; score &lt; 7 must include reasons.
+- Implement only the current epic scope; stub files are placeholders — do not flesh out future epics early.
+
+## Planning source of truth
+
+`planning/architecture.md`, `planning/milestones/m1-paper-understanding.md`.

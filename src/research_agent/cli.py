@@ -1,0 +1,112 @@
+"""Typer CLI entry point for Research Agent."""
+
+from __future__ import annotations
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from research_agent.config import Config, ConfigError
+
+app = typer.Typer(
+    name="research",
+    help="Research Agent — local-first multi-agent CLI for researchers.",
+    no_args_is_help=True,
+)
+config_app = typer.Typer(help="Manage configuration (API keys, model, paths).")
+app.add_typer(config_app, name="config")
+
+console = Console()
+
+
+def _load_config() -> Config:
+    return Config.load()
+
+
+@config_app.command("set")
+def config_set(
+    key: str = typer.Argument(..., help="Config key (api_key, model, base_url, data_dir)"),
+    value: str = typer.Argument(..., help="Value to set"),
+) -> None:
+    """Save a configuration value to ~/.research-agent/config.yaml."""
+    cfg = _load_config()
+    try:
+        cfg.set_field(key, value)
+    except ConfigError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]✓[/green] Set [bold]{key}[/bold]")
+
+
+@config_app.command("get")
+def config_get(
+    key: str = typer.Argument(..., help="Config key to read"),
+) -> None:
+    """Print a single configuration value (api_key is masked)."""
+    cfg = _load_config()
+    try:
+        console.print(cfg.get_field(key))
+    except ConfigError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+@config_app.command("show")
+def config_show() -> None:
+    """Display current configuration (API key is masked)."""
+    cfg = _load_config()
+    table = Table(title="Research Agent Configuration", show_header=True)
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+    table.add_row("api_key", cfg.masked_api_key())
+    table.add_row("model", cfg.model)
+    table.add_row("base_url", cfg.base_url)
+    table.add_row("data_dir", str(cfg.data_dir))
+    table.add_row("config_path", str(cfg.config_path))
+    console.print(table)
+
+
+@app.command()
+def read(
+    source: str = typer.Argument(
+        ...,
+        help="Paper source: arxiv:ID (e.g. arxiv:2301.12345) or local PDF path",
+    ),
+) -> None:
+    """Analyze a paper with Analyst + Critic dual perspectives. (Coming in E1.5)"""
+    _ensure_api_key()
+    console.print(
+        f"[yellow]Not implemented yet.[/yellow] Would analyze: {source}\n"
+        "See Epic E1.5 in planning/milestones/m1-paper-understanding.md"
+    )
+    raise typer.Exit(code=0)
+
+
+@app.command()
+def discuss() -> None:
+    """Start an interactive critical discussion session. (Coming in E1.5)"""
+    _ensure_api_key()
+    console.print(
+        "[yellow]Not implemented yet.[/yellow] Interactive discuss mode.\n"
+        "See Epic E1.5 in planning/milestones/m1-paper-understanding.md"
+    )
+    raise typer.Exit(code=0)
+
+
+def _ensure_api_key() -> None:
+    """Validate API key before commands that need LLM access."""
+    cfg = _load_config()
+    try:
+        cfg.require_api_key()
+    except ConfigError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
+def main() -> None:
+    """Console script entry point."""
+    app()
+
+
+if __name__ == "__main__":
+    main()

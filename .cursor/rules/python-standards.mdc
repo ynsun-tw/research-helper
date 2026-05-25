@@ -1,0 +1,45 @@
+---
+description: Python coding standards for research_agent
+globs: src/**/*.py
+alwaysApply: false
+---
+
+# Python Standards
+
+## Style
+
+- Python 3.11+, `from __future__ import annotations` in new modules.
+- Line length 100; format/lint with `ruff` (isort profile: first-party `research_agent`).
+- `mypy --strict` on `src/`; explicit types on public APIs.
+
+## Patterns
+
+```python
+# ✅ Domain errors
+class ConfigError(Exception):
+    """Raised when configuration is missing or invalid."""
+
+# ✅ Friendly CLI errors — no raw tracebacks to users for expected failures
+except ConfigError as exc:
+    console.print(f"[red]Error:[/red] {exc}")
+    raise typer.Exit(code=1) from exc
+
+# ❌ Bare except, silent failures, or logging secrets
+except Exception:
+    pass
+```
+
+## Imports
+
+- Stdlib → third-party → `research_agent` (ruff isort).
+- Lazy-import heavy deps (chromadb, fitz) only inside functions that need them.
+
+## Naming
+
+- Modules/files: `snake_case`. Classes: `PascalCase`. CLI commands: Typer function names → kebab via Typer defaults.
+- Agent classes: `Analyst`, `Critic`; results: `AnalysisResult`, `CritiqueResult` (dataclasses or Pydantic models).
+
+## Security
+
+- Never log or print full `api_key`; use `Config.masked_api_key()`.
+- Set config file mode `600` on save (`os.chmod`).
