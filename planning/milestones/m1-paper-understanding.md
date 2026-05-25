@@ -1,5 +1,5 @@
-> Status: PENDING
-> Index: [../../PLAN.md](../../PLAN.md)
+> Status: **DONE** (accepted 2026-05-25)
+> Index: [../../PLAN.md](../../PLAN.md) · Checklist: [../m1-acceptance-checklist.md](../m1-acceptance-checklist.md)
 
 # M1 — MVP: 论文深度理解
 

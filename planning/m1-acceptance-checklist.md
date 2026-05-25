@@ -2,6 +2,7 @@
 
 > 对应：[milestones/m1-paper-understanding.md](milestones/m1-paper-understanding.md)  
 > Epic 范围：E1.1 – E1.5（全部 DONE）  
+> **M1 验收状态：已通过（2026-05-25）**  
 > 建议验收人：开发者自测 + 可选 1 名目标用户（博士生/独立研究者）
 
 ---
@@ -184,23 +185,18 @@ sqlite3 ~/.research-agent/memory.db \
 
 | 项目 | 结果 |
 |------|------|
-| 验收日期 | |
-| 验收人 | |
-| 自动化门禁 | ☐ 通过 ☐ 未通过 |
-| M1-1 ~ M1-4 | ☐ 通过 ☐ 未通过 |
-| **M1 里程碑** | ☐ **通过，可关闭 M1** ☐ 不通过 |
+| 验收日期 | 2026-05-25 |
+| 验收人 | 项目维护者 |
+| 自动化门禁 | ☑ 通过 ☐ 未通过 |
+| M1-1 ~ M1-4 | ☑ 通过 ☐ 未通过 |
+| **M1 里程碑** | ☑ **通过，M1 已关闭** ☐ 不通过 |
 
-**未通过项记录**（可附 issue / 复现步骤）：
-
-```
-1.
-2.
-```
+**未通过项记录**：无。
 
 ---
 
-## 八、通过后建议操作
+## 八、通过后操作（已完成）
 
-1. 将 [milestones/m1-paper-understanding.md](milestones/m1-paper-understanding.md) 顶部 `Status` 改为 **DONE**
-2. 将 [PLAN.md](PLAN.md) 中 M1 里程碑状态改为 **DONE**
-3. 打 git tag（可选）：`git tag -a m1-mvp -m "M1 paper understanding MVP"`
+1. ☑ [milestones/m1-paper-understanding.md](milestones/m1-paper-understanding.md) → **DONE**
+2. ☑ [PLAN.md](PLAN.md) 中 M1 → **DONE**
+3. 可选 git tag：`git tag -a m1-mvp -m "M1 paper understanding MVP"`

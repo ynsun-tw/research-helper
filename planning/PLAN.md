@@ -4,7 +4,7 @@
 
 | ID | 标题 | 时间 | 状态 | 详情 |
 |----|------|------|------|------|
-| M1 | MVP: 论文深度理解 | 2周 | PENDING | [m1-paper-understanding.md](milestones/m1-paper-understanding.md) |
+| M1 | MVP: 论文深度理解 | 2周 | DONE | [m1-paper-understanding.md](milestones/m1-paper-understanding.md) |
 | M2 | Idea 讨论工坊 | 1周 | PENDING | [m2-idea-workshop.md](milestones/m2-idea-workshop.md) |
 | M3 | 文献智能搜索 | 3周 | PENDING | [m3-literature-intelligence.md](milestones/m3-literature-intelligence.md) |
 | M4 | 论文写作助手 | 2周 | PENDING | [m4-writing-assistant.md](milestones/m4-writing-assistant.md) |
