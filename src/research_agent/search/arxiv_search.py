@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,21 +32,111 @@ class ArxivSearchHit:
 
 
 class ArxivSearcher:
-    """Query export.arxiv.org for papers by title/keyword."""
+    """Query export.arxiv.org for papers by title/keyword.
 
-    def __init__(self, *, timeout: float = 30.0) -> None:
+    Wraps socket / URL errors as :class:`ArxivSearchError` so callers can
+    catch a single exception type. Retries are intentionally narrow:
+
+    - read timeout (``TimeoutError`` or ``URLError(reason=TimeoutError)``)
+      -> retry with ``retry_backoff`` linear delay
+    - HTTP 429 Too Many Requests -> retry honouring ``Retry-After`` when
+      present, otherwise exponential backoff seeded from
+      ``rate_limit_backoff``
+    - everything else (DNS, refused connection, 4xx other than 429, 5xx
+      that doesn't recur) fails fast - retries don't fix those.
+    """
+
+    def __init__(
+        self,
+        *,
+        timeout: float = 45.0,
+        retries: int = 2,
+        retry_backoff: float = 1.5,
+        rate_limit_backoff: float = 3.0,
+    ) -> None:
         self.timeout = timeout
+        self.retries = max(0, retries)
+        self.retry_backoff = max(0.0, retry_backoff)
+        self.rate_limit_backoff = max(0.0, rate_limit_backoff)
 
     def search(self, query: str, *, max_results: int = 5) -> list[ArxivSearchHit]:
         q = urllib.parse.quote(f"all:{query.strip()}")
         url = f"{ARXIV_API_URL}?search_query={q}&start=0&max_results={max_results}"
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "research-agent/0.1"})
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                data = resp.read()
-        except urllib.error.URLError as exc:
-            raise ArxivSearchError(f"arXiv search failed: {exc}") from exc
-        return _parse_atom_feed(data)
+        req = urllib.request.Request(url, headers={"User-Agent": "research-agent/0.1"})
+
+        attempts = self.retries + 1
+        last_exc: BaseException | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    data = resp.read()
+                return _parse_atom_feed(data)
+            except TimeoutError as exc:
+                last_exc = exc
+                if attempt < attempts:
+                    time.sleep(self.retry_backoff)
+                    continue
+                raise ArxivSearchError(
+                    f"arXiv search timed out after {self.timeout:.0f}s "
+                    f"(retried {self.retries}x). The API may be slow; "
+                    "try again in a moment or tighten your query."
+                ) from exc
+            except urllib.error.HTTPError as exc:
+                last_exc = exc
+                if exc.code == 429 and attempt < attempts:
+                    delay = _retry_after_seconds(exc.headers.get("Retry-After"))
+                    if delay is None:
+                        # arXiv asks for ~3s between requests; back off
+                        # exponentially across retries.
+                        delay = self.rate_limit_backoff * (2 ** (attempt - 1))
+                    time.sleep(delay)
+                    continue
+                if exc.code == 429:
+                    raise ArxivSearchError(
+                        "arXiv is rate-limiting this client (HTTP 429). "
+                        f"Retried {self.retries}x; wait ~30s before searching "
+                        "again, or reduce how often you call /search."
+                    ) from exc
+                raise ArxivSearchError(
+                    f"arXiv search failed: HTTP {exc.code} {exc.reason} "
+                    f"(url={url})"
+                ) from exc
+            except urllib.error.URLError as exc:
+                # urllib sometimes wraps socket timeouts here.
+                if isinstance(exc.reason, TimeoutError) and attempt < attempts:
+                    last_exc = exc
+                    time.sleep(self.retry_backoff)
+                    continue
+                raise ArxivSearchError(f"arXiv search failed: {exc}") from exc
+            except (ET.ParseError, ValueError) as exc:
+                raise ArxivSearchError(
+                    f"arXiv returned an unparseable response: {exc}"
+                ) from exc
+
+        # Defensive: loop above always returns or raises; keep mypy happy.
+        raise ArxivSearchError(
+            f"arXiv search failed after {attempts} attempt(s): {last_exc}"
+        )
+
+
+def _retry_after_seconds(header: str | None) -> float | None:
+    """Parse a Retry-After header value into seconds, or None if absent/bad.
+
+    Supports the plain-seconds form (e.g. "30"). The HTTP-date form is
+    ignored - arXiv only emits the seconds form in practice and falling
+    back to the configured exponential backoff is safer than parsing
+    RFC dates here.
+    """
+    if not header:
+        return None
+    try:
+        seconds = float(header.strip())
+    except (TypeError, ValueError):
+        return None
+    # Clamp to a sane range so a buggy server can't stall us for hours.
+    if seconds < 0:
+        return None
+    return min(seconds, 60.0)
 
 
 def _parse_atom_feed(xml_bytes: bytes) -> list[ArxivSearchHit]:
