@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from research_agent.core.paper import Paper, Section
-from research_agent.style.extractor import extract_samples, split_paragraphs
+from research_agent.style.extractor import (
+    extract_samples,
+    extract_samples_from_text,
+    split_paragraphs,
+)
 
 
 def _prose(seed: str = "A") -> str:
@@ -81,6 +85,19 @@ def test_extract_samples_falls_back_to_full_text() -> None:
     samples = extract_samples(paper)
     assert len(samples) == 2
     assert all(s.section_title == "" for s in samples)
+
+
+def test_extract_samples_from_text_returns_filtered_paragraphs() -> None:
+    body = _prose("A") + "\n\nToo short.\n\n" + _prose("B")
+    out = extract_samples_from_text(body, paper_id="revision:abc", section_title="Method")
+    assert len(out) == 2  # short paragraph dropped
+    assert all(s.paper_id == "revision:abc" for s in out)
+    assert all(s.section_title == "Method" for s in out)
+
+
+def test_extract_samples_from_text_empty_input() -> None:
+    assert extract_samples_from_text("", paper_id="revision:x") == []
+    assert extract_samples_from_text("Too short.", paper_id="revision:x") == []
 
 
 def test_extract_samples_drops_short_and_math_paragraphs() -> None:

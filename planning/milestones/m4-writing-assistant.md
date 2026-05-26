@@ -67,7 +67,7 @@
   `tests/unit/test_style_analyzer.py` 共 19 用例，覆盖 round-trip、
   empty corpus、宏观/微观/markers 抽取、CLI dispatch。
 
-### Story S4.1.3 — 风格指纹持续学习
+### Story S4.1.3 — 风格指纹持续学习 [x] COMPLETED
 
 **验收条件**:
 - 用户修改 Scribe 生成的内容后，差异自动记录为学习样本
@@ -75,9 +75,21 @@
 - 指纹版本管理：每次更新保留历史版本
 
 **Tasks**:
-- [ ] T4.1.3.1 实现用户修改追踪：保存 `(original, revised)` 对
-- [ ] T4.1.3.2 实现增量指纹更新：从修改差异中提取新的风格信号
-- [ ] T4.1.3.3 实现指纹版本历史（fingerprint_v1.json, v2.json...）
+- [x] T4.1.3.1 实现用户修改追踪：保存 `(original, revised)` 对 —
+  已由 S4.3.2 完成（`draft_revisions` 表 + 交互模式默认 save）。
+- [x] T4.1.3.2 实现增量指纹更新：从修改差异中提取新的风格信号 —
+  新增 `extract_samples_from_text` 把 `revised_text` 切段
+  / 过滤后变成临时 `StyleSample`（paper_id=`revision:<id>`，
+  不写库），加上 `style_samples` 一起喂给 `StyleAnalyzer.analyze`。
+  `research style update` 服务入口。
+- [x] T4.1.3.3 实现指纹版本历史（fingerprint_v1.json, v2.json...）—
+  `Fingerprint.save_to(path, preserve_history=True)`：
+  存在旧 fingerprint 时，按其 `version` 字段移到
+  `fingerprint_v<N>.json`，新文件 version 自动 +1；
+  归档槽位冲突时用 `-1`, `-2`… 防止覆盖。
+  `research style history` 列出当前 + 所有归档版本（含 created_at /
+  sample count）。共 35 unit tests 覆盖 save_to history / archive
+  collision / update 端到端 / history listing。
 
 ---
 

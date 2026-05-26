@@ -98,3 +98,50 @@ def test_load_from_invalid_payload(tmp_path: Path) -> None:
         pass
     else:
         raise AssertionError("expected ValueError on non-dict payload")
+
+
+def test_save_to_preserves_history(tmp_path: Path) -> None:
+    path = tmp_path / "fp.json"
+    v1 = _filled()
+    v1.save_to(path)
+    assert v1.version == 1
+
+    v2 = _filled()
+    v2.save_to(path, preserve_history=True)
+    # The new fingerprint bumped to v2 and the prior file moved aside.
+    assert v2.version == 2
+    archive = tmp_path / "fp_v1.json"
+    assert archive.exists()
+    loaded_archive = Fingerprint.load_from(archive)
+    assert loaded_archive.version == 1
+    # Current file holds v2.
+    assert Fingerprint.load_from(path).version == 2
+
+    v3 = _filled()
+    v3.save_to(path, preserve_history=True)
+    assert v3.version == 3
+    assert (tmp_path / "fp_v2.json").exists()
+
+
+def test_save_to_with_no_history_overwrites(tmp_path: Path) -> None:
+    path = tmp_path / "fp.json"
+    _filled().save_to(path)
+    second = _filled()
+    second.save_to(path)  # default preserve_history=False
+    # No archive created.
+    assert not (tmp_path / "fp_v1.json").exists()
+    # Version still 1 (no bump because no history kept).
+    assert Fingerprint.load_from(path).version == 1
+
+
+def test_save_to_archive_slot_collision(tmp_path: Path) -> None:
+    """When the archive name is already taken (re-run with same v) we
+    append an incrementing suffix instead of clobbering it."""
+    path = tmp_path / "fp.json"
+    _filled().save_to(path)
+    # Pre-create the v1 archive slot
+    (tmp_path / "fp_v1.json").write_text("{}", encoding="utf-8")
+    _filled().save_to(path, preserve_history=True)
+    # Original archive remained, suffix-numbered archive was used instead.
+    assert (tmp_path / "fp_v1.json").exists()
+    assert (tmp_path / "fp_v1-1.json").exists()

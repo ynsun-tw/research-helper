@@ -84,6 +84,26 @@ def extract_samples(paper: Paper) -> list[StyleSample]:
     return samples
 
 
+def extract_samples_from_text(
+    text: str,
+    *,
+    paper_id: str,
+    section_title: str = "",
+) -> list[StyleSample]:
+    """Variant of :func:`extract_samples` that takes raw text.
+
+    Used by S4.1.3 to fold accepted Scribe revisions into the
+    fingerprint training set without needing a Paper object.
+    Returns an empty list when no paragraph survives the filter.
+    """
+    samples: list[StyleSample] = []
+    for paragraph in split_paragraphs(text or ""):
+        sample = _make_sample(paper_id, section_title, paragraph)
+        if sample is not None:
+            samples.append(sample)
+    return samples
+
+
 def _make_sample(paper_id: str, section_title: str, paragraph: str) -> StyleSample | None:
     if not is_useful_paragraph(paragraph):
         return None

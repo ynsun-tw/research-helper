@@ -15,12 +15,15 @@ from typer.testing import CliRunner
 from research_agent.cli import app
 from research_agent.cli_style import (
     run_style_fingerprint,
+    run_style_history,
     run_style_show,
     run_style_train,
+    run_style_update,
 )
 from research_agent.config import Config
 from research_agent.core.paper import Paper, Section
 from research_agent.storage.database import Database
+from research_agent.storage.draft_revisions import DraftRevisionRepository
 from research_agent.style.fingerprint import Fingerprint
 from research_agent.style.samples import StyleSampleRepository
 
@@ -229,3 +232,83 @@ def test_style_fingerprint_help() -> None:
     result = runner.invoke(app, ["style", "fingerprint", "--help"])
     assert result.exit_code == 0
     assert "fingerprint" in result.stdout.lower()
+
+
+# --- S4.1.3: continuous fingerprint learning -------------------------------
+
+
+def test_style_update_requires_corpus(config_dir: Path) -> None:
+    cfg = Config.load(config_dir)
+    assert run_style_update(cfg, Console()) == 1
+
+
+def test_style_update_combines_samples_and_revisions(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+) -> None:
+    monkeypatch.setattr(
+        "research_agent.cli_style.load_paper",
+        lambda src, *, cache_dir: _fake_paper("arxiv:0001.0001", _PROSE_A + "\n\n" + _PROSE_B),
+    )
+    cfg = Config.load(config_dir)
+    run_style_train(cfg, Console(), sources=["arxiv:0001.0001"])
+    run_style_fingerprint(cfg, Console())
+    assert Fingerprint.load_from(cfg.fingerprint_path).version == 1
+
+    db = Database(cfg.db_path)
+    try:
+        rev_repo = DraftRevisionRepository(db)
+        rev_repo.add(
+            section="introduction",
+            original_text="Old.",
+            revised_text=_PROSE_A + "\n\n" + _PROSE_B,
+            interactive=True,
+        )
+    finally:
+        db.close()
+
+    code = run_style_update(cfg, Console())
+    assert code == 0
+    fp = Fingerprint.load_from(cfg.fingerprint_path)
+    assert fp.version == 2
+    # Two base prose paragraphs + two revision-derived = 4 samples.
+    assert fp.sample_count == 4
+    archive = cfg.style_dir / "fingerprint_v1.json"
+    assert archive.exists()
+
+
+def test_style_history_lists_versions(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+) -> None:
+    monkeypatch.setattr(
+        "research_agent.cli_style.load_paper",
+        lambda src, *, cache_dir: _fake_paper("arxiv:0001.0001", _PROSE_A + "\n\n" + _PROSE_B),
+    )
+    cfg = Config.load(config_dir)
+    run_style_train(cfg, Console(), sources=["arxiv:0001.0001"])
+    run_style_fingerprint(cfg, Console())
+    # Bump twice
+    run_style_update(cfg, Console())
+    run_style_update(cfg, Console())
+    code = run_style_history(cfg, Console())
+    assert code == 0
+    # Confirm filesystem has v1 + v2 archives + current fingerprint.json
+    assert (cfg.style_dir / "fingerprint_v1.json").exists()
+    assert (cfg.style_dir / "fingerprint_v2.json").exists()
+    assert Fingerprint.load_from(cfg.fingerprint_path).version == 3
+
+
+def test_style_history_no_style_dir(config_dir: Path) -> None:
+    cfg = Config.load(config_dir)
+    assert run_style_history(cfg, Console()) == 0
+
+
+def test_style_update_help() -> None:
+    result = runner.invoke(app, ["style", "update", "--help"])
+    assert result.exit_code == 0
+    assert "fingerprint" in result.stdout.lower()
+
+
+def test_style_history_help() -> None:
+    result = runner.invoke(app, ["style", "history", "--help"])
+    assert result.exit_code == 0
+    assert "version" in result.stdout.lower()

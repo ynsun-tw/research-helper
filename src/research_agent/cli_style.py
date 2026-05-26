@@ -17,8 +17,9 @@ from rich.table import Table
 from research_agent.config import Config
 from research_agent.core.loader import PaperLoadError, load_paper
 from research_agent.storage.database import Database
+from research_agent.storage.draft_revisions import DraftRevisionRepository
 from research_agent.style.analyzer import StyleAnalyzer
-from research_agent.style.extractor import extract_samples
+from research_agent.style.extractor import extract_samples, extract_samples_from_text
 from research_agent.style.fingerprint import Fingerprint
 from research_agent.style.samples import StyleSampleRepository
 
@@ -211,6 +212,104 @@ def run_style_fingerprint(cfg: Config, console: Console) -> int:
         f"[bold]{cfg.fingerprint_path}[/bold]"
     )
     _render_fingerprint(console, fp, cfg.fingerprint_path)
+    return 0
+
+
+def run_style_update(cfg: Config, console: Console) -> int:
+    """Recompute the fingerprint from samples + accepted Scribe revisions.
+
+    Acts as the continuous-learning entry point (M4 S4.1.3): every
+    interactive review session that the user accepted now feeds the
+    fingerprint update. The previous ``fingerprint.json`` is archived
+    under ``fingerprint_vN.json`` before the new one lands.
+    """
+    db = Database(cfg.db_path)
+    try:
+        sample_repo = StyleSampleRepository(db)
+        rev_repo = DraftRevisionRepository(db)
+        base_samples = sample_repo.list_all()
+        revisions = rev_repo.list_all()
+    finally:
+        db.close()
+
+    extra_samples = []
+    for rev in revisions:
+        extra_samples.extend(
+            extract_samples_from_text(
+                rev.revised_text,
+                paper_id=f"revision:{rev.id}",
+                section_title=rev.section,
+            )
+        )
+
+    combined = base_samples + extra_samples
+    if not combined:
+        console.print(
+            "[yellow]No samples to learn from.[/yellow] "
+            "Train first with [bold]research style train[/bold]."
+        )
+        return 1
+
+    fp = StyleAnalyzer().analyze(combined)
+    fp.save_to(cfg.fingerprint_path, preserve_history=True)
+    console.print(
+        f"[green]✓[/green] Updated fingerprint v{fp.version} → "
+        f"[bold]{cfg.fingerprint_path}[/bold]\n"
+        f"[dim]Base samples: {len(base_samples)}, "
+        f"revision-derived: {len(extra_samples)} "
+        f"(from {len(revisions)} accepted revisions)[/dim]"
+    )
+    _render_fingerprint(console, fp, cfg.fingerprint_path)
+    return 0
+
+
+def run_style_history(cfg: Config, console: Console) -> int:
+    """List archived fingerprint versions next to the current one."""
+    style_dir = cfg.style_dir
+    if not style_dir.exists():
+        console.print(
+            "[yellow]No fingerprints exist yet.[/yellow] "
+            "Run [bold]research style fingerprint[/bold] first."
+        )
+        return 0
+    archives = sorted(style_dir.glob("fingerprint_v*.json"))
+    current = cfg.fingerprint_path
+    table = Table(title="Fingerprint history", show_header=True)
+    table.add_column("Version", justify="right")
+    table.add_column("Path")
+    table.add_column("Created")
+    table.add_column("Samples", justify="right")
+    rows: list[tuple[int, Path]] = []
+    if current.exists():
+        try:
+            cur_fp = Fingerprint.load_from(current)
+            rows.append((cur_fp.version, current))
+        except Exception:
+            pass
+    for path in archives:
+        try:
+            fp = Fingerprint.load_from(path)
+            rows.append((fp.version, path))
+        except Exception:
+            continue
+    if not rows:
+        console.print("[yellow]No readable fingerprint files yet.[/yellow]")
+        return 0
+    rows.sort(key=lambda kv: kv[0], reverse=True)
+    for version, path in rows:
+        try:
+            fp = Fingerprint.load_from(path)
+        except Exception:
+            continue
+        is_current = path == current
+        marker = " [bold green](current)[/bold green]" if is_current else ""
+        table.add_row(
+            f"v{version}{marker}",
+            str(path.name),
+            fp.created_at or "—",
+            f"{fp.sample_count} ({fp.paper_count}p)",
+        )
+    console.print(table)
     return 0
 
 

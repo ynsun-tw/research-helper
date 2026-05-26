@@ -319,9 +319,35 @@ address the items you accepted, and at the end you get a coloured
 unified diff between original and revised. The (original, revised,
 selected_*, rejected_*) tuple is persisted to the
 `draft_revisions` SQLite table by default — pass `--no-save` to opt
-out. S4.1.3 (continuous fingerprint learning) consumes these rows
-to keep the fingerprint in sync with how you actually edit Scribe
-output.
+out. The continuous-learning loop (next subsection) consumes these
+rows to keep the fingerprint in sync with how you actually edit
+Scribe output.
+
+#### Continuous fingerprint learning
+
+```bash
+research style update          # refresh fingerprint from samples + accepted revisions
+research style history         # list all saved fingerprint versions
+```
+
+`research style update` recomputes the fingerprint by combining the
+static `style_samples` corpus with every accepted Scribe revision
+(`revised_text` from the `draft_revisions` table) and bumps the
+version. The previous `fingerprint.json` is archived next to it as
+`fingerprint_v<N>.json`; `research style history` lists every
+version side by side so you can see how your voice drifts as you
+keep using Scribe.
+
+The flow is:
+
+1. `research style train` (one-shot, from your published papers) →
+   seeds the corpus.
+2. `research style fingerprint` → v1 baseline.
+3. `research write <section> --context …` → drafts.
+4. `research review <file> --interactive` → accept / reject
+   suggestions; the (original, revised) pair is saved.
+5. `research style update` → folds those accepted revisions back
+   into the fingerprint as v2, v3, …
 
 ## Development
 

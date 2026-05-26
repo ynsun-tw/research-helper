@@ -21,7 +21,7 @@ analysis, embedding queries) lives in ``agents/scribe.py`` and
 """
 
 from research_agent.style.analyzer import StyleAnalyzer
-from research_agent.style.extractor import extract_samples
+from research_agent.style.extractor import extract_samples, extract_samples_from_text
 from research_agent.style.filters import is_useful_paragraph
 from research_agent.style.fingerprint import (
     Fingerprint,
@@ -40,5 +40,6 @@ __all__ = [
     "StyleSample",
     "StyleSampleRepository",
     "extract_samples",
+    "extract_samples_from_text",
     "is_useful_paragraph",
 ]

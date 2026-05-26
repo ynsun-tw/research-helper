@@ -97,8 +97,36 @@ class Fingerprint:
             created_at=str(data.get("created_at", "") or ""),
         )
 
-    def save_to(self, path: Path) -> None:
+    def save_to(self, path: Path, *, preserve_history: bool = False) -> None:
+        """Persist the fingerprint JSON.
+
+        When ``preserve_history`` is true and ``path`` already exists,
+        archive the existing file to ``<stem>_v<old_version>.json``
+        beside it and bump ``self.version`` to ``old_version + 1``.
+        This keeps a linear history (``fingerprint_v1.json``,
+        ``fingerprint_v2.json``, …) next to the always-current
+        ``fingerprint.json``.
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
+        if preserve_history and path.exists():
+            try:
+                old = Fingerprint.load_from(path)
+                archived = path.with_name(f"{path.stem}_v{old.version}{path.suffix}")
+                # If the archive slot is already taken (re-run with same
+                # version), just append an incrementing suffix to avoid
+                # silently clobbering it.
+                idx = 0
+                while archived.exists():
+                    idx += 1
+                    archived = path.with_name(
+                        f"{path.stem}_v{old.version}-{idx}{path.suffix}"
+                    )
+                path.rename(archived)
+                self.version = old.version + 1
+            except Exception:
+                # If the existing file is unreadable, we'd rather
+                # overwrite it than crash the update.
+                pass
         if not self.created_at:
             self.created_at = datetime.now(tz=UTC).isoformat(timespec="seconds")
         with path.open("w", encoding="utf-8") as f:

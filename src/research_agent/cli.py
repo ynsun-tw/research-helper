@@ -23,8 +23,10 @@ from research_agent.chat import run_chat
 from research_agent.cli_review import run_review
 from research_agent.cli_style import (
     run_style_fingerprint,
+    run_style_history,
     run_style_show,
     run_style_train,
+    run_style_update,
 )
 from research_agent.cli_write import run_write
 from research_agent.config import Config, ConfigError
@@ -416,6 +418,30 @@ def style_fingerprint() -> None:
     """
     cfg = _load_config()
     code = run_style_fingerprint(cfg, console)
+    raise typer.Exit(code=code)
+
+
+@style_app.command("update")
+def style_update() -> None:
+    """Recompute the fingerprint after picking up new revisions.
+
+    Combines the static ``style_samples`` corpus with accepted
+    Scribe revisions (the ``revised_text`` fields in
+    ``draft_revisions``) and rewrites
+    ``~/.research-agent/style/fingerprint.json``. The previous file
+    is archived as ``fingerprint_v<N>.json`` so you can track how
+    the fingerprint drifts over time.
+    """
+    cfg = _load_config()
+    code = run_style_update(cfg, console)
+    raise typer.Exit(code=code)
+
+
+@style_app.command("history")
+def style_history() -> None:
+    """List the fingerprint versions saved under ``~/.research-agent/style/``."""
+    cfg = _load_config()
+    code = run_style_history(cfg, console)
     raise typer.Exit(code=code)
 
 
