@@ -59,6 +59,36 @@ CREATE TABLE IF NOT EXISTS discussions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_discussions_session ON discussions(session_id);
+
+-- M3.1 (precursor to the full Searcher Agent): keep a lightweight log of
+-- queries the user has issued and the hits returned so /search has memory
+-- across REPL sessions and we can flag already-read papers.
+CREATE TABLE IF NOT EXISTS search_queries (
+    id          TEXT PRIMARY KEY,
+    session_id  TEXT,
+    query       TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT 'arxiv',
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_search_queries_created
+    ON search_queries(created_at);
+
+CREATE TABLE IF NOT EXISTS search_results (
+    id          TEXT PRIMARY KEY,
+    query_id    TEXT NOT NULL,
+    arxiv_id    TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    abstract    TEXT,
+    published   TEXT,
+    rank        INTEGER,
+    FOREIGN KEY (query_id) REFERENCES search_queries(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_search_results_arxiv
+    ON search_results(arxiv_id);
+CREATE INDEX IF NOT EXISTS idx_search_results_query
+    ON search_results(query_id);
 """
 
 

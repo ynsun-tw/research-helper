@@ -7,7 +7,7 @@
 | M1 | MVP: 论文深度理解 | 2周 | DONE | [m1-paper-understanding.md](milestones/m1-paper-understanding.md) |
 | M2 | Idea 讨论工坊 | 1周 | DONE | [m2-idea-workshop.md](milestones/m2-idea-workshop.md) |
 | M2.5 | Conversational Shell（单入口 REPL + LLM tool calling） | 0.5周 | DONE | 见 [notes.md](notes.md) ADR-006 |
-| M3 | 文献智能搜索 | 3周 | PENDING | [m3-literature-intelligence.md](milestones/m3-literature-intelligence.md) |
+| M3 | 文献智能搜索 | 3周 | IN PROGRESS | [m3-literature-intelligence.md](milestones/m3-literature-intelligence.md) |
 | M4 | 论文写作助手 | 2周 | PENDING | [m4-writing-assistant.md](milestones/m4-writing-assistant.md) |
 | M5 | 研究自动化与完善 | 4周 | PENDING | [m5-research-automation.md](milestones/m5-research-automation.md) |
 
@@ -29,7 +29,7 @@
 | E2.3 | Idea 生命周期管理 | M2 | DONE |
 | E2.5.1 | REPL + slash 工具入口 | M2.5 | DONE |
 | E2.5.2 | LLM tool calling 与 agent loop | M2.5 | DONE |
-| E3.1 | Searcher Agent | M3 | PENDING |
+| E3.1 | Searcher Agent | M3 | IN PROGRESS（M3.1 切片：search history + dedup 完成） |
 | E3.2 | 搜索流水线与用户审核 | M3 | PENDING |
 | E3.3 | Memory Keeper 完整版 | M3 | PENDING |
 | E3.4 | 主动提醒机制 | M3 | PENDING |

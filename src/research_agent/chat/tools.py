@@ -28,6 +28,7 @@ from research_agent.core.llm import LLMError
 from research_agent.core.loader import PaperLoadError
 from research_agent.core.paper_resolver import search_arxiv_papers
 from research_agent.search.arxiv_search import ArxivSearchError, ArxivSearchHit
+from research_agent.storage.searches import StoredSearchQuery
 from research_agent.ui.formatting import render_paper_header, render_read_report
 
 SlashHandler = Callable[[ChatSession, str], None]
@@ -113,7 +114,7 @@ def llm_tool_schemas() -> list[dict[str, Any]]:
 
 @slash(
     "search",
-    summary="Search arXiv by keywords (does not load).",
+    summary="Search arXiv by keywords (logs to history; flags already-read).",
     usage="/search <keywords>",
 )
 def cmd_search(session: ChatSession, args: str) -> None:
@@ -127,29 +128,54 @@ def cmd_search(session: ChatSession, args: str) -> None:
         session.console.print(f"[red]Error:[/red] {exc}")
         return
 
-    _render_search_hits(session, args, hits)
+    session.searches.record(
+        args, hits, source="arxiv", session_id=session.memory.session_id
+    )
+    already_read = session.searches.already_read([h.arxiv_id for h in hits])
+    _render_search_hits(session, args, hits, already_read=already_read)
     session.memory.append(
         "system",
-        _search_summary(args, hits),
+        _search_summary(args, hits, already_read=already_read),
     )
 
 
-def _render_search_hits(session: ChatSession, query: str, hits: list[ArxivSearchHit]) -> None:
+def _render_search_hits(
+    session: ChatSession,
+    query: str,
+    hits: list[ArxivSearchHit],
+    *,
+    already_read: set[str] | None = None,
+) -> None:
+    already_read = already_read or set()
     table = Table(title=f"arXiv results for: {query}", show_header=True)
     table.add_column("ID", style="cyan")
     table.add_column("Title")
     table.add_column("Year", justify="right")
+    table.add_column("Read", justify="center")
     for hit in hits:
         year = hit.published[:4] if hit.published else "—"
-        table.add_row(hit.arxiv_id, hit.title[:80], year)
+        read_mark = "[green]✓[/green]" if hit.arxiv_id in already_read else ""
+        table.add_row(hit.arxiv_id, hit.title[:80], year, read_mark)
     session.console.print(table)
-    session.console.print("[dim]Use[/dim] /read <id> [dim]to load one.[/dim]")
+    session.console.print(
+        "[dim]Use[/dim] /read <id> [dim]to load one;[/dim] "
+        "[green]✓[/green] [dim]= already in your local library.[/dim]"
+    )
 
 
-def _search_summary(query: str, hits: list[ArxivSearchHit]) -> str:
+def _search_summary(
+    query: str,
+    hits: list[ArxivSearchHit],
+    *,
+    already_read: set[str] | None = None,
+) -> str:
     if not hits:
         return f"Searched arXiv for {query!r}; no results."
-    rows = [f"- {h.arxiv_id}: {h.title[:80]}" for h in hits]
+    read_set = already_read or set()
+    rows: list[str] = []
+    for h in hits:
+        marker = " [read]" if h.arxiv_id in read_set else ""
+        rows.append(f"- {h.arxiv_id}: {h.title[:80]}{marker}")
     return f"Searched arXiv for {query!r}; {len(hits)} results:\n" + "\n".join(rows)
 
 
@@ -182,8 +208,63 @@ def exec_search_arxiv(session: ChatSession, args: dict[str, Any]) -> str:
             hits = search_arxiv_papers(query, max_results=max_results)
     except (PaperLoadError, ArxivSearchError) as exc:
         return f"Error: {exc}"
-    _render_search_hits(session, query, hits)
-    return _search_summary(query, hits)
+    session.searches.record(
+        query, hits, source="arxiv", session_id=session.memory.session_id
+    )
+    already_read = session.searches.already_read([h.arxiv_id for h in hits])
+    _render_search_hits(session, query, hits, already_read=already_read)
+    return _search_summary(query, hits, already_read=already_read)
+
+
+# ---------------------------------------------------------------- history
+
+
+@slash(
+    "history",
+    summary="Show recent /search queries (cross-session, with already-read marks).",
+    usage="/history [N]",
+)
+def cmd_history(session: ChatSession, args: str) -> None:
+    limit = 10
+    if args:
+        try:
+            limit = max(1, min(int(args.strip()), 50))
+        except ValueError:
+            session.console.print(
+                "[yellow]Usage:[/yellow] /history [N]   (N is a positive integer)"
+            )
+            return
+
+    queries = session.searches.recent_queries(limit=limit)
+    if not queries:
+        session.console.print("[dim]No search history yet. Try /search <keywords>.[/dim]")
+        return
+    _render_history(session, queries)
+
+
+def _render_history(session: ChatSession, queries: list[StoredSearchQuery]) -> None:
+    table = Table(
+        title=f"Recent searches (showing {len(queries)})", show_header=True
+    )
+    table.add_column("When", style="dim")
+    table.add_column("Source", style="dim")
+    table.add_column("Query", style="cyan")
+    table.add_column("Hits", justify="right")
+    table.add_column("Read", justify="right")
+    for q in queries:
+        read_count = sum(1 for h in q.hits if h.read)
+        table.add_row(
+            q.created_at,
+            q.source,
+            q.query,
+            str(len(q.hits)),
+            f"{read_count}/{len(q.hits)}" if q.hits else "0/0",
+        )
+    session.console.print(table)
+    session.console.print(
+        "[dim]Re-run a query with[/dim] /search <keywords>; "
+        "[dim]load any hit with[/dim] /read <arxiv-id>."
+    )
 
 
 # ---------------------------------------------------------------- read

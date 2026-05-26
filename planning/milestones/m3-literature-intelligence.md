@@ -1,5 +1,11 @@
-> Status: PENDING
+> Status: IN PROGRESS
 > Index: [../../PLAN.md](../../PLAN.md)
+>
+> **M2.5 适配注记（2026-05）**：CLI 已收敛为单一 `research` REPL（详见
+> [../notes.md](../notes.md) ADR-006）。本里程碑里所有写作 `research search` /
+> `research read --batch` 的子命令形态，统一转译为 REPL 内的 slash 命令
+> （`/search` / `/history` / `/read` …）以及 LLM tool calling 自动调度。
+> 子任务文案仍保留原表述，但实现路径走 chat 工具注册表 + `SearchRepository`。
 
 # M3 — 文献智能搜索
 
@@ -8,8 +14,8 @@
 **时间**: 3 周（Sprint 3: 2周 + Sprint 4: 1周）
 **前置条件**: M2 完成（辩论模式、Idea 管理可用）
 **验收标准**:
-- `research search "efficient attention"` 返回多源搜索结果，含相关度评分
-- 用户审核后批量阅读：`research read --batch approved_list.json`
+- 在 `research` REPL 中通过 `/search "efficient attention"`（或自然语言触发 `search_arxiv` 工具）返回多源搜索结果，含相关度评分
+- 用户审核后批量阅读：REPL 内 `/queue add` → `/read --queue` 流程（或对应自然语言）
 - Memory Keeper 能跨会话检索历史讨论和关联 Idea
 - 主动提醒：新论文与历史搁置 Idea 相关时自动提示
 
@@ -28,10 +34,10 @@
 - 结果按相关度排序
 
 **Tasks**:
-- [ ] T3.1.1.1 实现 `ArxivSearcher`（使用 `arxiv` Python 库）
-- [ ] T3.1.1.2 实现搜索结果缓存（TTL: 24h，避免重复 API 调用）
-- [ ] T3.1.1.3 实现结果去重：过滤已读论文（已在 `papers` 表中的 ID）
-- [ ] T3.1.1.4 单元测试：搜索结果解析、缓存命中/未命中
+- [x] T3.1.1.1 实现 `ArxivSearcher`（已在 M2 用 arXiv Atom API 直接实现，见 `search/arxiv_search.py`）
+- [x] T3.1.1.2 搜索结果持久化（M3.1 切片：`search_queries` + `search_results` 表 + `SearchRepository`；`/history [N]` 跨会话查看；缓存 TTL 等高级策略并入完整 Searcher Agent）
+- [x] T3.1.1.3 结果去重标记：`SearchRepository.already_read` 与 `papers` 表 join，`/search` 输出表格里用 ✓ 标已读
+- [x] T3.1.1.4 单元测试：`tests/unit/test_searches.py`（repo 顺序/限额/读标记/legacy DB 迁移 + `cmd_search`/`cmd_history` 集成）
 
 ### Story S3.1.2 — Semantic Scholar 集成
 
