@@ -174,6 +174,6 @@
 - 搜索到相关论文时对比已有条件列表
 
 **Tasks**:
-- [ ] T3.4.2.1 在 Idea 表新增 `activation_conditions` 字段
-- [ ] T3.4.2.2 实现条件设置 CLI：`ideas shelve --condition`
-- [ ] T3.4.2.3 实现条件匹配：在搜索结果中检查是否满足任何 shelved Idea 的条件
+- [x] T3.4.2.1 `Idea.activation_conditions: list[str]`（dataclass + sqlite 列 + idempotent migration `ALTER TABLE ideas ADD COLUMN activation_conditions TEXT`）。`IdeaRepository.add_activation_condition` 做 case-insensitive 去重 + 空字符串短路，`clear_activation_conditions` 一键清空。row hydration 容忍老库 NULL 值（fall back 到 `[]`，不破坏从 M2 升级上来的数据库）。4 个单测见 `tests/unit/test_ideas.py`（持久化、去重、清空、legacy NULL）。
+- [x] T3.4.2.2 `/ideas update <id> --condition <phrase>` slash（贪婪吞到下一个 `--` flag 之前，所以多词条件无需引号；可在一行里链式 `--condition A --condition B`）+ `--clear-conditions`。底层 `cli_ideas.run_ideas_update` 把 `conditions: list[str]` 和 `clear_conditions: bool` 串到 `IdeaRepository`；`/ideas show` 输出多一段 "Activation conditions" block。7 个 slash 单测见 `tests/unit/test_chat_ideas_update_conditions.py`（单条/多条/清空/清空再设/与 `--status` 组合/未知 id 报错/无 flag 报 usage）。
+- [x] T3.4.2.3 `chat/tools._surface_activation_alerts(session, hits)` 在 `/search` 和 LLM `search_arxiv` 工具的渲染表格之后跑一遍：拿出所有 `shelved`/`waiting` 且有 `activation_conditions` 的 idea，逐 hit 做 `condition.lower() in (title + abstract).lower()` 的子串匹配；命中后一行 `- <arxiv_id> "<title>" matches condition "<phrase>" on <idea title> — /idea show <prefix>`，最多渲染 3 条。同时把摘要塞进 working memory 让 LLM 续聊也看得到。任何异常 swallowed（搜索本身不能挂）。设计理由：用户给的条件几乎都是字面术语（"FineWeb-Edu dataset"、"Llama-3.5 release"），子串匹配召回足够，省掉一次 LLM round-trip。10 个单测见 `tests/unit/test_chat_activation_alerts.py`（title/abstract 命中 / 大小写无关 / inactive 状态过滤 / 无条件 idea 无 banner / 空 hits 短路 / 不匹配 silent / 上限 3 条 / 同 (idea, hit) 不重复 / 异常 swallowed / system memory 写入）。

@@ -92,6 +92,16 @@ revisit context you parked earlier. Tune the trigger via
 `research config set alert_threshold 0.85` (range `[0.0, 1.0]`;
 lower = more reminders, higher = fewer false positives).
 
+You can also pin **activation conditions** on a shelved idea — free-form
+phrases that describe what would unblock it (a dataset release, a
+checkpoint, a baseline result). Set them via
+`/ideas update <id> --condition "FineWeb-Edu dataset"` (repeatable in one
+command, clear with `--clear-conditions`). Every `/search` then scans
+incoming hits for those phrases (case-insensitive substring) and prints
+a "Shelved idea(s) may have an unblock" banner whenever a new paper
+mentions one — letting search results pull an idea back into your
+attention automatically.
+
 ### Natural language → tools
 
 Plain text is sent to the LLM, which has function-calling access to the

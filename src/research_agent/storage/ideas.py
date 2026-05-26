@@ -40,9 +40,10 @@ class IdeaRepository:
                 INSERT INTO ideas (
                     id, title, description, status,
                     analyst_score, critic_score, critic_objections,
-                    related_papers, score_history, user_score_feedback
+                    related_papers, score_history, user_score_feedback,
+                    activation_conditions
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     idea.id,
@@ -53,6 +54,7 @@ class IdeaRepository:
                     idea.critic_score,
                     json.dumps(idea.critic_objections, ensure_ascii=False),
                     json.dumps(idea.related_papers, ensure_ascii=False),
+                    json.dumps([], ensure_ascii=False),
                     json.dumps([], ensure_ascii=False),
                     json.dumps([], ensure_ascii=False),
                 ),
@@ -70,9 +72,10 @@ class IdeaRepository:
                 INSERT INTO ideas (
                     id, title, description, status,
                     analyst_score, critic_score, critic_objections,
-                    related_papers, score_history, user_score_feedback
+                    related_papers, score_history, user_score_feedback,
+                    activation_conditions
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     description = excluded.description,
@@ -83,6 +86,7 @@ class IdeaRepository:
                     related_papers = excluded.related_papers,
                     score_history = excluded.score_history,
                     user_score_feedback = excluded.user_score_feedback,
+                    activation_conditions = excluded.activation_conditions,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 _idea_to_row(idea),
@@ -137,6 +141,36 @@ class IdeaRepository:
         self.save(idea)
         return idea
 
+    def add_activation_condition(self, idea_id: str, condition: str) -> Idea:
+        """Append a free-form activation condition (deduped, case-insensitive).
+
+        Conditions are user-supplied phrases describing what *would* unblock a
+        shelved idea (e.g. "needs FineWeb-Edu dataset", "1B model checkpoint
+        released"). The search-result alert in `chat/tools` looks for these
+        phrases inside incoming paper titles/abstracts.
+        """
+        idea = self.get(idea_id)
+        if idea is None:
+            raise KeyError(f"Idea not found: {idea_id}")
+        cleaned = condition.strip()
+        if not cleaned:
+            return idea
+        lowered = cleaned.lower()
+        existing_lowered = {c.lower() for c in idea.activation_conditions}
+        if lowered in existing_lowered:
+            return idea
+        idea.activation_conditions.append(cleaned)
+        self.save(idea)
+        return idea
+
+    def clear_activation_conditions(self, idea_id: str) -> Idea:
+        idea = self.get(idea_id)
+        if idea is None:
+            raise KeyError(f"Idea not found: {idea_id}")
+        idea.activation_conditions = []
+        self.save(idea)
+        return idea
+
     def session_ids(self, idea_id: str) -> list[str]:
         rows = self.db.conn.execute(
             """
@@ -161,6 +195,7 @@ def _idea_to_row(idea: Idea) -> tuple[object, ...]:
         json.dumps(idea.related_papers, ensure_ascii=False),
         json.dumps([asdict(e) for e in idea.score_history], ensure_ascii=False),
         json.dumps(idea.user_score_feedback, ensure_ascii=False),
+        json.dumps(idea.activation_conditions, ensure_ascii=False),
     )
 
 
@@ -181,6 +216,13 @@ def _row_to_idea(row: sqlite3.Row) -> Idea:
                     )
                 )
     feedback: list[str] = json.loads(feedback_raw) if feedback_raw else []
+    # `activation_conditions` was added in M3 T3.4.2 and is missing on older
+    # rows; tolerate absence and treat as empty.
+    try:
+        conditions_raw = row["activation_conditions"]
+    except (IndexError, KeyError):
+        conditions_raw = None
+    conditions: list[str] = json.loads(conditions_raw) if conditions_raw else []
     return Idea(
         id=row["id"],
         title=row["title"],
@@ -192,4 +234,5 @@ def _row_to_idea(row: sqlite3.Row) -> Idea:
         related_papers=[str(p) for p in related],
         score_history=history,
         user_score_feedback=[str(f) for f in feedback],
+        activation_conditions=[str(c) for c in conditions],
     )

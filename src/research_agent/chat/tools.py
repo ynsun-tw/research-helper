@@ -168,6 +168,7 @@ def cmd_search(session: ChatSession, args: str) -> None:
     sorted_hits = _sort_by_score(scored)
     already_read = session.searches.already_read([h.arxiv_id for h in sorted_hits])
     _render_search_hits(session, query, sorted_hits, already_read=already_read)
+    _surface_activation_alerts(session, sorted_hits)
     session.memory.append(
         "system",
         _search_summary(query, sorted_hits, already_read=already_read),
@@ -380,6 +381,7 @@ def exec_search_arxiv(session: ChatSession, args: dict[str, Any]) -> str:
     sorted_hits = _sort_by_score(scored)
     already_read = session.searches.already_read([h.arxiv_id for h in sorted_hits])
     _render_search_hits(session, query, sorted_hits, already_read=already_read)
+    _surface_activation_alerts(session, sorted_hits)
     return _search_summary(query, sorted_hits, already_read=already_read)
 
 
@@ -1122,6 +1124,67 @@ def _surface_parked_idea_alerts(session: ChatSession, paper: Paper) -> None:
         return
 
 
+def _surface_activation_alerts(
+    session: ChatSession, hits: list[ArxivSearchHit]
+) -> None:
+    """Print a one-line banner if any incoming search hit looks like it
+    satisfies an `activation_conditions` phrase on a shelved/waiting idea
+    (M3 T3.4.2.3).
+
+    The match is intentionally simple - case-insensitive substring of the
+    user-supplied condition phrase against ``hit.title + ' ' + hit.abstract``.
+    Free-form phrases like "FineWeb-Edu dataset" or "1B model checkpoint"
+    almost always survive verbatim in the new paper if it actually delivers
+    them, and we have no LLM-budget to spend on this pre-filter step.
+
+    Caps the banner at 3 lines (most-recent hits first) so it never
+    drowns out the search table. All failures swallowed.
+    """
+    try:
+        if not hits:
+            return
+        ideas = [
+            i
+            for i in session.ideas.list_all()
+            if i.activation_conditions and i.status in ("shelved", "waiting")
+        ]
+        if not ideas:
+            return
+        matches: list[tuple[str, str, ArxivSearchHit, str]] = []
+        for hit in hits:
+            haystack = f"{hit.title}\n{hit.abstract or ''}".lower()
+            if not haystack.strip():
+                continue
+            for idea in ideas:
+                for condition in idea.activation_conditions:
+                    needle = condition.strip().lower()
+                    if needle and needle in haystack:
+                        matches.append((idea.id, idea.title, hit, condition))
+                        # Only first matching condition per (idea, hit)
+                        break
+        if not matches:
+            return
+        session.console.print(
+            "[bold yellow]Shelved idea(s) may have an unblock:[/bold yellow]"
+        )
+        for idea_id, idea_title, hit, condition in matches[:3]:
+            session.console.print(
+                f"  - [cyan]{hit.arxiv_id}[/cyan] [italic]{hit.title[:60]}[/italic] "
+                f"matches condition “{condition}” on "
+                f"[bold]{idea_title}[/bold] — "
+                f"/idea show {idea_id[:8]}"
+            )
+        # Memory note so the LLM can pick up the thread if the user keeps
+        # chatting after /search.
+        titles = ", ".join({m[1] for m in matches[:3]})
+        session.memory.append(
+            "system",
+            f"Search hits may satisfy activation conditions on: {titles}",
+        )
+    except Exception:
+        return
+
+
 def _alert_threshold(session: ChatSession) -> float:
     """Resolve the association similarity threshold from Config.
 
@@ -1453,7 +1516,11 @@ def _show_current_idea(session: ChatSession) -> None:
 @slash(
     "ideas",
     summary="Browse the saved-ideas library.",
-    usage="/ideas [list] | /ideas show <id> | /ideas update <id> --status <status>",
+    usage=(
+        "/ideas [list] | /ideas show <id> | /ideas update <id> "
+        "[--status <s>] [--feedback <note>] [--condition <phrase>] "
+        "[--clear-conditions]"
+    ),
 )
 def cmd_ideas(session: ChatSession, args: str) -> None:
     parts = args.split()
@@ -1478,12 +1545,16 @@ def cmd_ideas(session: ChatSession, args: str) -> None:
 def _ideas_update(session: ChatSession, tokens: list[str]) -> None:
     if not tokens:
         session.console.print(
-            "[yellow]Usage:[/yellow] /ideas update <id> --status <status> | --feedback <note>"
+            "[yellow]Usage:[/yellow] /ideas update <id> "
+            "[--status <status>] [--feedback <note>] "
+            '[--condition "<phrase>"] [--clear-conditions]'
         )
         return
     idea_id = tokens[0]
     status: IdeaStatus | None = None
     feedback: str | None = None
+    conditions: list[str] = []
+    clear_conditions = False
     i = 1
     while i < len(tokens):
         token = tokens[i]
@@ -1496,14 +1567,33 @@ def _ideas_update(session: ChatSession, tokens: list[str]) -> None:
                 return
             status = candidate
             i += 2
+        elif token == "--condition" and i + 1 < len(tokens):
+            # Greedy: consume everything until the next --flag so phrases can
+            # contain spaces without quoting (e.g. `--condition needs FineWeb
+            # dataset`). Stops at the next `--xxx` flag to allow chaining
+            # multiple conditions in one command.
+            j = i + 1
+            while j < len(tokens) and not tokens[j].startswith("--"):
+                j += 1
+            conditions.append(" ".join(tokens[i + 1 : j]))
+            i = j
+        elif token == "--clear-conditions":
+            clear_conditions = True
+            i += 1
         elif token == "--feedback" and i + 1 < len(tokens):
             feedback = " ".join(tokens[i + 1 :])
             break
         else:
             i += 1
-    if status is None and feedback is None:
+    if (
+        status is None
+        and feedback is None
+        and not conditions
+        and not clear_conditions
+    ):
         session.console.print(
-            "[yellow]Nothing to update. Use --status or --feedback.[/yellow]"
+            "[yellow]Nothing to update. Use --status, --feedback, --condition, "
+            "or --clear-conditions.[/yellow]"
         )
         return
     run_ideas_update(
@@ -1512,6 +1602,8 @@ def _ideas_update(session: ChatSession, tokens: list[str]) -> None:
         idea_id,
         status=status,
         feedback=feedback,
+        conditions=conditions or None,
+        clear_conditions=clear_conditions,
     )
 
 

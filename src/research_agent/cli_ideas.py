@@ -65,6 +65,13 @@ def run_ideas_show(cfg: Config, console: Console, idea_id: str) -> int:
             for entry in idea.score_history:
                 sid = f" session={entry.session_id[:8]}…" if entry.session_id else ""
                 console.print(f"  - {entry.score:.0f}/9 — {entry.reason}{sid}")
+        if idea.activation_conditions:
+            console.print(
+                "\n[bold]Activation conditions[/bold] "
+                "(matched against future search hits)"
+            )
+            for cond in idea.activation_conditions:
+                console.print(f"  - {cond}")
         if idea.user_score_feedback:
             console.print("\n[bold]Your score feedback[/bold] (recorded, does not change scores)")
             for note in idea.user_score_feedback:
@@ -88,6 +95,8 @@ def run_ideas_update(
     *,
     status: IdeaStatus | None = None,
     feedback: str | None = None,
+    conditions: list[str] | None = None,
+    clear_conditions: bool = False,
 ) -> int:
     db = Database(cfg.db_path)
     try:
@@ -106,6 +115,17 @@ def run_ideas_update(
         if feedback:
             repo.add_user_score_feedback(resolved, feedback)
             console.print("[green]✓[/green] Score feedback recorded (current score unchanged)")
+        if clear_conditions:
+            repo.clear_activation_conditions(resolved)
+            console.print("[green]✓[/green] Activation conditions cleared")
+        for condition in conditions or []:
+            cleaned = condition.strip()
+            if not cleaned:
+                continue
+            repo.add_activation_condition(resolved, cleaned)
+            console.print(
+                f"[green]✓[/green] Activation condition added: [italic]{cleaned}[/italic]"
+            )
         return 0
     finally:
         db.close()

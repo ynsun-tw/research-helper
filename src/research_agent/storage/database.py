@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS ideas (
     critic_score     REAL,
     critic_objections TEXT,
     related_papers   TEXT,
+    activation_conditions TEXT,
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -130,6 +131,8 @@ class Database:
             self.conn.execute("ALTER TABLE ideas ADD COLUMN score_history TEXT")
         if "user_score_feedback" not in idea_cols:
             self.conn.execute("ALTER TABLE ideas ADD COLUMN user_score_feedback TEXT")
+        if "activation_conditions" not in idea_cols:
+            self.conn.execute("ALTER TABLE ideas ADD COLUMN activation_conditions TEXT")
 
         disc_rows = self.conn.execute("PRAGMA table_info(discussions)").fetchall()
         disc_cols = {row[1] for row in disc_rows}

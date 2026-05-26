@@ -45,6 +45,10 @@ class Idea:
     related_papers: list[str] = field(default_factory=list)
     score_history: list[ScoreHistoryEntry] = field(default_factory=list)
     user_score_feedback: list[str] = field(default_factory=list)
+    # Conditions that, when matched against new papers, should activate this
+    # idea back to the user's attention. Used by the search-result alert in
+    # `chat/tools._surface_activation_alerts`. Stored as free-form strings.
+    activation_conditions: list[str] = field(default_factory=list)
 
 
 class InvalidStatusTransition(Exception):
