@@ -29,6 +29,7 @@ from research_agent.core.loader import PaperLoadError
 from research_agent.core.paper_resolver import search_arxiv_papers
 from research_agent.search.arxiv_search import ArxivSearchError, ArxivSearchHit
 from research_agent.storage.discussions import DiscussionMessage
+from research_agent.storage.reading_queue import ALLOWED_STATUSES, QueueEntry, QueueStatus
 from research_agent.storage.searches import StoredSearchQuery
 from research_agent.ui.formatting import render_paper_header, render_read_report
 
@@ -492,6 +493,255 @@ def exec_recall_history(session: ChatSession, args: dict[str, Any]) -> str:
     return _recall_text(matches, query=query)
 
 
+# ---------------------------------------------------------------- queue
+
+
+_QUEUE_SUBS_HELP = (
+    "[yellow]Usage:[/yellow] "
+    "/queue [list|add <id> [title…]|remove <id>|done <id>|skip <id>|read|next]"
+)
+
+
+@slash(
+    "queue",
+    summary="Manage the reading queue (add / list / remove / read next).",
+    usage="/queue [list|add <id>|remove <id>|done <id>|skip <id>|read|next]",
+)
+def cmd_queue(session: ChatSession, args: str) -> None:
+    parts = args.strip().split(maxsplit=1)
+    sub = parts[0].lower() if parts else "list"
+    rest = parts[1] if len(parts) > 1 else ""
+
+    if sub in {"list", ""}:
+        status_filter: QueueStatus | None = None
+        if rest:
+            r = rest.strip().lower()
+            if r == "all":
+                status_filter = None
+            elif r in ALLOWED_STATUSES:
+                status_filter = r  # type: ignore[assignment]
+            else:
+                session.console.print(
+                    f"[yellow]Unknown filter[/yellow] {r!r}. "
+                    f"Use one of: all, {', '.join(sorted(ALLOWED_STATUSES))}."
+                )
+                return
+        else:
+            status_filter = "pending"
+        _render_queue(session, status_filter)
+        return
+
+    if sub == "add":
+        if not rest:
+            session.console.print(
+                "[yellow]Usage:[/yellow] /queue add <arxiv-id> [title…]"
+            )
+            return
+        bits = rest.split(maxsplit=1)
+        arxiv_id = bits[0]
+        title = bits[1] if len(bits) > 1 else ""
+        entry = session.queue.add(arxiv_id, title=title, source="manual")
+        session.console.print(
+            f"[green]Queued[/green] {entry.arxiv_id}"
+            + (f" - {entry.title}" if entry.title else "")
+        )
+        return
+
+    if sub in {"remove", "rm"}:
+        if not rest:
+            session.console.print("[yellow]Usage:[/yellow] /queue remove <arxiv-id>")
+            return
+        removed = session.queue.remove(rest.strip())
+        if removed:
+            session.console.print(f"[green]Removed[/green] {rest.strip()} from queue.")
+        else:
+            session.console.print(f"[yellow]Not in queue:[/yellow] {rest.strip()}")
+        return
+
+    if sub in {"done", "skip"}:
+        target_status: QueueStatus = "done" if sub == "done" else "skipped"
+        if not rest:
+            session.console.print(
+                f"[yellow]Usage:[/yellow] /queue {sub} <arxiv-id>"
+            )
+            return
+        updated: QueueEntry | None = session.queue.set_status(
+            rest.strip(), target_status
+        )
+        if updated is None:
+            session.console.print(f"[yellow]Not in queue:[/yellow] {rest.strip()}")
+        else:
+            session.console.print(
+                f"[green]Marked[/green] {updated.arxiv_id} as {updated.status}."
+            )
+        return
+
+    if sub == "next":
+        next_entry: QueueEntry | None = session.queue.next_pending()
+        if next_entry is None:
+            session.console.print(
+                "[dim]Queue is empty. Add papers with /queue add <id>.[/dim]"
+            )
+            return
+        session.console.print(
+            f"[bold]Next up:[/bold] [cyan]{next_entry.arxiv_id}[/cyan] "
+            f"{next_entry.title}"
+        )
+        session.console.print("[dim]Run[/dim] /queue read [dim]to load it.[/dim]")
+        return
+
+    if sub == "read":
+        read_entry: QueueEntry | None = session.queue.next_pending()
+        if read_entry is None:
+            session.console.print(
+                "[dim]Queue is empty. Add papers with /queue add <id>.[/dim]"
+            )
+            return
+        session.queue.set_status(read_entry.arxiv_id, "in_progress")
+        session.console.print(
+            f"[bold]Reading next pending:[/bold] "
+            f"{read_entry.arxiv_id} {read_entry.title}"
+        )
+        result = _load_and_analyze(session, read_entry.arxiv_id)
+        # status update is handled inside _load_and_analyze success path
+        if result is not None:
+            session.console.print(f"[dim]{result.splitlines()[0]}[/dim]")
+        return
+
+    session.console.print(_QUEUE_SUBS_HELP)
+
+
+def _render_queue(
+    session: ChatSession, status: QueueStatus | None
+) -> None:
+    entries = session.queue.list(status=status)
+    if not entries:
+        if status is None or status == "pending":
+            session.console.print(
+                "[dim]Reading queue is empty. Use[/dim] /queue add <arxiv-id> "
+                "[dim]to add a paper.[/dim]"
+            )
+        else:
+            session.console.print(
+                f"[dim]No entries with status[/dim] {status}."
+            )
+        return
+    title = (
+        "Reading queue (pending)"
+        if status == "pending"
+        else "Reading queue"
+        if status is None
+        else f"Reading queue ({status})"
+    )
+    table = Table(title=title, show_header=True)
+    table.add_column("arXiv ID", style="cyan")
+    table.add_column("Title")
+    table.add_column("Status", justify="center")
+    table.add_column("Added", style="dim")
+    for e in entries:
+        table.add_row(e.arxiv_id, (e.title or "(no title)")[:80], e.status, e.added_at)
+    session.console.print(table)
+
+
+def _queue_summary_text(entries: list[QueueEntry], *, label: str) -> str:
+    if not entries:
+        return f"{label}: queue is empty."
+    lines = [f"{label} ({len(entries)} entry/ies):"]
+    for e in entries:
+        title = e.title or "(no title)"
+        if len(title) > 100:
+            title = title[:97] + "…"
+        lines.append(f"- {e.arxiv_id} [{e.status}] {title}")
+    return "\n".join(lines)
+
+
+@register_llm_tool(
+    "queue_add",
+    _function_schema(
+        "queue_add",
+        "Add an arXiv paper to the user's reading queue (status=pending). "
+        "If the paper is already queued, refreshes its title/source instead.",
+        {
+            "arxiv_id": {
+                "type": "string",
+                "description": "arXiv id, e.g. 1706.03762.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Optional title to store with the entry.",
+            },
+        },
+        required=["arxiv_id"],
+    ),
+)
+def exec_queue_add(session: ChatSession, args: dict[str, Any]) -> str:
+    arxiv_id = str(args.get("arxiv_id", "")).strip()
+    if not arxiv_id:
+        return "Error: arxiv_id is required."
+    title = str(args.get("title", "")).strip()
+    entry = session.queue.add(arxiv_id, title=title, source="llm")
+    session.console.print(
+        f"[green]Queued[/green] {entry.arxiv_id}"
+        + (f" - {entry.title}" if entry.title else "")
+    )
+    return (
+        f"Queued {entry.arxiv_id} with status={entry.status}"
+        + (f" (title: {entry.title})" if entry.title else "")
+    )
+
+
+@register_llm_tool(
+    "queue_list",
+    _function_schema(
+        "queue_list",
+        "List entries in the reading queue. Defaults to 'pending'; pass "
+        "status='all' to include done/skipped too.",
+        {
+            "status": {
+                "type": "string",
+                "description": (
+                    "One of pending, in_progress, done, skipped, or 'all' "
+                    "for every status."
+                ),
+            },
+        },
+    ),
+)
+def exec_queue_list(session: ChatSession, args: dict[str, Any]) -> str:
+    raw = str(args.get("status", "pending")).strip().lower() or "pending"
+    if raw == "all":
+        entries = session.queue.list()
+        label = "Reading queue (all)"
+    elif raw in ALLOWED_STATUSES:
+        entries = session.queue.list(status=raw)  # type: ignore[arg-type]
+        label = f"Reading queue ({raw})"
+    else:
+        return (
+            f"Error: status must be one of all, {', '.join(sorted(ALLOWED_STATUSES))}."
+        )
+    if entries:
+        _render_queue(session, raw if raw in ALLOWED_STATUSES else None)  # type: ignore[arg-type]
+    return _queue_summary_text(entries, label=label)
+
+
+@register_llm_tool(
+    "queue_next",
+    _function_schema(
+        "queue_next",
+        "Return the next pending paper in the user's reading queue (FIFO). "
+        "Returns the arxiv_id so you can chain into load_paper. Does not "
+        "mutate state.",
+        {},
+    ),
+)
+def exec_queue_next(session: ChatSession, args: dict[str, Any]) -> str:
+    entry = session.queue.next_pending()
+    if entry is None:
+        return "Queue is empty."
+    title = f" (title: {entry.title})" if entry.title else ""
+    return f"Next pending: {entry.arxiv_id}{title}. Use load_paper to read it."
+
+
 # ---------------------------------------------------------------- read
 
 
@@ -545,6 +795,11 @@ def _load_and_analyze(session: ChatSession, source: str) -> str | None:
         "system",
         f"Loaded and analyzed paper: {paper.title} ({paper.id})",
     )
+    if session.queue.get(paper.id) is not None:
+        session.queue.set_status(paper.id, "done")
+        session.console.print(
+            f"[dim]✓ Marked[/dim] {paper.id} [dim]as done in the reading queue.[/dim]"
+        )
     session.debate.rounds.clear()
     session.idea_seed = ""
     return (

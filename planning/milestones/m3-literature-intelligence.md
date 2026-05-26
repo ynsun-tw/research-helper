@@ -82,24 +82,24 @@
 - 支持 `--sources arxiv,semantic` 指定数据源
 
 **Tasks**:
-- [ ] T3.2.1.1 实现 `search` CLI 命令
-- [ ] T3.2.1.2 实现 Rich 渲染的结果展示（表格 + 评分可视化）
-- [ ] T3.2.1.3 实现交互式审核循环（单键操作，无需回车）
-- [ ] T3.2.1.4 实现待读队列：将审核通过的论文存入 `reading_queue` 表
+- [x] T3.2.1.1 `/search` slash + `search_arxiv` LLM 工具（M2.5 已完成）
+- [x] T3.2.1.2 Rich 表格 + LLM 相关度分（task 1）
+- [ ] T3.2.1.3 交互式单键审核（chat 模式下用 `/queue add <id>` + LLM 工具 `queue_add` 替代，仍可在后续做"批量审核"流程）
+- [x] T3.2.1.4 待读队列持久化：`reading_queue` 表 + `ReadingQueueRepository`（`storage/reading_queue.py`），支持 pending / in_progress / done / skipped 四态
 
 ### Story S3.2.2 — 批量阅读
 
 **验收条件**:
-- `research read --queue` 按顺序批量分析待读队列中的论文
-- 每篇论文分析完成后暂停，用户确认后继续
-- 支持跳过（`[s]kip`）和中止（`[q]uit`）
-- 批量分析结果自动存入记忆库
+- `/queue read` 按顺序加载待读队列的下一篇并自动 Analyst + Critic
+- 加载成功后自动把队列状态推进到 done（在 `_load_and_analyze` 成功路径里挂钩）
+- 支持手动 `done` / `skip`，下一次 `/queue read` 自动取最早的 pending
+- 队列状态持久化在 SQLite，重启 REPL 仍能继续
 
 **Tasks**:
-- [ ] T3.2.2.1 实现 `read --queue` 批量模式
-- [ ] T3.2.2.2 实现逐篇确认 + 跳过逻辑
-- [ ] T3.2.2.3 实现批量进度持久化（中断后可继续）
-- [ ] T3.2.2.4 E2E 测试：批量读取 3 篇论文的完整流程
+- [x] T3.2.2.1 `/queue read` 取下一篇 pending 并复用 `_load_and_analyze` 流程
+- [x] T3.2.2.2 手动 `/queue done|skip <arxiv-id>` + 自动 mark done on success
+- [x] T3.2.2.3 队列状态持久化（SQLite，FIFO by `added_at`）；LLM 可调 `queue_next` 拿下一篇 → 链入 `load_paper`
+- [ ] T3.2.2.4 E2E 测试：批量读取 3 篇论文的完整流程（单元层面已覆盖 `/queue read` + auto-mark-done + FIFO，见 `tests/unit/test_reading_queue.py`）
 
 ### Story S3.2.3 — 动态搜索策略调整
 

@@ -91,6 +91,19 @@ CREATE INDEX IF NOT EXISTS idx_search_results_arxiv
     ON search_results(arxiv_id);
 CREATE INDEX IF NOT EXISTS idx_search_results_query
     ON search_results(query_id);
+
+CREATE TABLE IF NOT EXISTS reading_queue (
+    id            TEXT PRIMARY KEY,
+    arxiv_id      TEXT NOT NULL UNIQUE,
+    title         TEXT NOT NULL DEFAULT '',
+    source        TEXT NOT NULL DEFAULT 'manual',
+    status        TEXT NOT NULL DEFAULT 'pending',
+    notes         TEXT,
+    added_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at  TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_reading_queue_status
+    ON reading_queue(status, added_at);
 """
 
 

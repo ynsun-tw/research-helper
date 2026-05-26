@@ -25,6 +25,7 @@ from research_agent.storage.database import Database, PaperRepository
 from research_agent.storage.discussion_vectors import DiscussionVectorStore
 from research_agent.storage.discussions import DiscussionRepository
 from research_agent.storage.ideas import IdeaRepository
+from research_agent.storage.reading_queue import ReadingQueueRepository
 from research_agent.storage.searches import SearchRepository
 from research_agent.storage.vector_store import IdeaVectorStore
 
@@ -43,6 +44,7 @@ class ChatSession:
     papers: PaperRepository
     ideas: IdeaRepository
     searches: SearchRepository
+    queue: ReadingQueueRepository
     vectors: IdeaVectorStore
     discussion_vectors: DiscussionVectorStore
     keeper: MemoryKeeper
@@ -73,6 +75,7 @@ class ChatSession:
         papers = PaperRepository(db)
         ideas = IdeaRepository(db)
         searches = SearchRepository(db)
+        queue = ReadingQueueRepository(db)
         if use_chroma is None:
             use_chroma = not bool(os.environ.get("RESEARCH_AGENT_TEST_MODE"))
         vectors = IdeaVectorStore(cfg.chroma_dir, use_chroma=use_chroma)
@@ -98,6 +101,7 @@ class ChatSession:
             papers=papers,
             ideas=ideas,
             searches=searches,
+            queue=queue,
             vectors=vectors,
             discussion_vectors=discussion_vectors,
             keeper=keeper,
