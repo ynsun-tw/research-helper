@@ -166,3 +166,106 @@ def test_repl_starts_with_api_key(
     assert result.exit_code == 0, result.stdout
     assert "Research Agent" in result.stdout
     assert "Session saved" in result.stdout
+
+
+# --- M5 S5.4.4 --version flag + version sync -------------------------------
+
+
+def test_version_flag_long() -> None:
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert "research-agent" in result.stdout
+
+
+def test_version_flag_short() -> None:
+    result = runner.invoke(app, ["-V"])
+    assert result.exit_code == 0
+    assert "research-agent" in result.stdout
+
+
+def test_version_matches_pyproject() -> None:
+    """``research_agent.__version__`` must mirror the [project] version
+    in ``pyproject.toml`` so the CLI and the distribution don't drift."""
+    import tomllib
+
+    from research_agent import __version__
+
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    assert data["project"]["version"] == __version__
+
+
+# --- M5 S5.4.2 global error handler ----------------------------------------
+
+
+def test_main_wraps_unexpected_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Random Python exceptions should be presented as one friendly line."""
+    from research_agent import cli as cli_module
+
+    def _boom() -> None:
+        raise RuntimeError("simulated explosion")
+
+    monkeypatch.setattr(cli_module, "app", _boom)
+    monkeypatch.delenv("RESEARCH_AGENT_DEBUG", raising=False)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli_module.main()
+    assert excinfo.value.code == 1
+
+
+def test_main_propagates_with_debug_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RESEARCH_AGENT_DEBUG=1 should bypass the wrapper for real debugging."""
+    from research_agent import cli as cli_module
+
+    def _boom() -> None:
+        raise RuntimeError("simulated explosion")
+
+    monkeypatch.setattr(cli_module, "app", _boom)
+    monkeypatch.setenv("RESEARCH_AGENT_DEBUG", "1")
+    with pytest.raises(RuntimeError, match="simulated explosion"):
+        cli_module.main()
+
+
+def test_main_handles_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ctrl-C should exit 130 with a one-line "Interrupted." note."""
+    from research_agent import cli as cli_module
+
+    def _interrupt() -> None:
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(cli_module, "app", _interrupt)
+    monkeypatch.delenv("RESEARCH_AGENT_DEBUG", raising=False)
+    with pytest.raises(SystemExit) as excinfo:
+        cli_module.main()
+    assert excinfo.value.code == 130
+
+
+def test_main_handles_config_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ConfigError should produce a friendly message + hint."""
+    from research_agent import cli as cli_module
+    from research_agent.config import ConfigError
+
+    def _broken_config() -> None:
+        raise ConfigError("invalid yaml at line 7")
+
+    monkeypatch.setattr(cli_module, "app", _broken_config)
+    monkeypatch.delenv("RESEARCH_AGENT_DEBUG", raising=False)
+    with pytest.raises(SystemExit) as excinfo:
+        cli_module.main()
+    assert excinfo.value.code == 1
+
+
+def test_main_preserves_typer_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``typer.Exit`` from a command must not be swallowed by the wrapper."""
+    import typer
+
+    from research_agent import cli as cli_module
+
+    def _typer_exit() -> None:
+        raise typer.Exit(code=2)
+
+    monkeypatch.setattr(cli_module, "app", _typer_exit)
+    monkeypatch.delenv("RESEARCH_AGENT_DEBUG", raising=False)
+    with pytest.raises(typer.Exit) as excinfo:
+        cli_module.main()
+    assert excinfo.value.exit_code == 2

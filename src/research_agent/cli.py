@@ -1,13 +1,13 @@
 """Typer CLI entry point for Research Agent (conversational shell).
 
-Only two surfaces remain after M2.5:
-- ``research`` (no subcommand) enters the conversational REPL.
-- ``research config ...`` manages persisted configuration.
-
-Legacy ``read``/``discuss``/``ideas`` subcommands have been removed in favor of
-the in-REPL slash commands (``/read``, ``/discuss``, ``/ideas``). The
-underlying service functions (``run_read``, ``run_discuss``, ``run_ideas_*``)
-remain importable so the chat tools and tests can call them directly.
+Imports are kept deliberately light at module scope: only ``typer``,
+``rich``, and a couple of cheap config helpers. Every command body
+imports the heavy dependencies (``research_agent.chat``,
+``cli_write``, ``cli_figure``, ``cli_check``, ``cli_review``,
+``cli_style``, ``MetaMemory``, ``Database``, ``LLMClient``) on
+first use. This keeps ``research --help`` and any single-subcommand
+invocation from paying the pymupdf + chromadb import tax that the
+REPL needs.
 """
 
 from __future__ import annotations
@@ -18,24 +18,14 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from research_agent.agents.meta_memory import MetaMemory
-from research_agent.chat import run_chat
-from research_agent.cli_check import run_check
-from research_agent.cli_figure import run_figure
-from research_agent.cli_review import run_review
-from research_agent.cli_style import (
-    run_style_fingerprint,
-    run_style_history,
-    run_style_show,
-    run_style_train,
-    run_style_update,
-)
-from research_agent.cli_write import run_write
 from research_agent.config import Config, ConfigError
 from research_agent.core.language import language_label
-from research_agent.core.llm import LLMClient
-from research_agent.storage.database import Database
-from research_agent.style.plagiarism import DEFAULT_THRESHOLD
+
+# Default similarity threshold for ``research check``. Kept here as a
+# literal to avoid pulling in ``research_agent.style.plagiarism``
+# (and its tokenizer + tfidf code) just to evaluate the Typer
+# ``--threshold`` default at decorator time.
+DEFAULT_CHECK_THRESHOLD = 0.4
 
 app = typer.Typer(
     name="research",
@@ -71,12 +61,33 @@ def _ensure_api_key() -> Config:
     return cfg
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        from research_agent import __version__
+
+        console.print(f"research-agent {__version__}")
+        raise typer.Exit(code=0)
+
+
 @app.callback(invoke_without_command=True)
-def _root(ctx: typer.Context) -> None:
+def _root(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed Research Agent version and exit.",
+    ),
+) -> None:
     """Default: enter the conversational REPL when no subcommand is given."""
     if ctx.invoked_subcommand is not None:
         return
     cfg = _ensure_api_key()
+    from research_agent.chat import run_chat
+    from research_agent.core.llm import LLMClient
+
     llm = LLMClient.from_config(cfg)
     code = run_chat(cfg, llm, console)
     raise typer.Exit(code=code)
@@ -175,6 +186,9 @@ def insights(
             console.print(f"[red]Error:[/red] {exc}")
             raise typer.Exit(code=1) from exc
 
+    from research_agent.agents.meta_memory import MetaMemory
+    from research_agent.storage.database import Database
+
     db = Database(cfg.db_path)
     try:
         report = MetaMemory(db).compute(since_days=since_days)
@@ -229,6 +243,8 @@ def style_train(
     if directory.strip():
         dir_path = Path(directory).expanduser()
 
+    from research_agent.cli_style import run_style_train
+
     result = run_style_train(
         cfg,
         console,
@@ -244,6 +260,8 @@ def style_train(
 def style_show() -> None:
     """Print a summary of the current style training corpus."""
     cfg = _load_config()
+    from research_agent.cli_style import run_style_show
+
     code = run_style_show(cfg, console)
     raise typer.Exit(code=code)
 
@@ -317,6 +335,8 @@ def write_command(
     cfg = _ensure_api_key()
     out_path = Path(output).expanduser() if output.strip() else None
     check_paths = [Path(p).expanduser() for p in (check_against or []) if p and p.strip()]
+    from research_agent.cli_write import run_write
+
     run_write(
         cfg,
         console,
@@ -404,6 +424,8 @@ def figure_command(
         console.print("[red]Error:[/red] --versions must be a positive integer.")
         raise typer.Exit(code=1)
     out_path = Path(output).expanduser() if output.strip() else None
+    from research_agent.cli_figure import run_figure
+
     run_figure(
         cfg,
         console,
@@ -424,7 +446,7 @@ def check_command(
         help="Path to a Markdown / text file containing the draft to check.",
     ),
     threshold: float = typer.Option(
-        DEFAULT_THRESHOLD,
+        DEFAULT_CHECK_THRESHOLD,
         "--threshold",
         "-t",
         help=(
@@ -460,6 +482,8 @@ def check_command(
         )
         raise typer.Exit(code=1)
     out_path = Path(output).expanduser() if output.strip() else None
+    from research_agent.cli_check import run_check
+
     result = run_check(
         cfg, console, draft_path=path, threshold=threshold, output=out_path
     )
@@ -537,6 +561,8 @@ def review_command(
         raise typer.Exit(code=1)
     out_path = Path(output).expanduser() if output.strip() else None
     effective_save = save or (interactive and not no_save)
+    from research_agent.cli_review import run_review
+
     run_review(
         cfg,
         console,
@@ -560,6 +586,8 @@ def style_fingerprint() -> None:
     rate). Writes ``~/.research-agent/style/fingerprint.json``.
     """
     cfg = _load_config()
+    from research_agent.cli_style import run_style_fingerprint
+
     code = run_style_fingerprint(cfg, console)
     raise typer.Exit(code=code)
 
@@ -576,6 +604,8 @@ def style_update() -> None:
     the fingerprint drifts over time.
     """
     cfg = _load_config()
+    from research_agent.cli_style import run_style_update
+
     code = run_style_update(cfg, console)
     raise typer.Exit(code=code)
 
@@ -584,13 +614,95 @@ def style_update() -> None:
 def style_history() -> None:
     """List the fingerprint versions saved under ``~/.research-agent/style/``."""
     cfg = _load_config()
+    from research_agent.cli_style import run_style_history
+
     code = run_style_history(cfg, console)
     raise typer.Exit(code=code)
 
 
+@app.command("doctor")
+def doctor_command() -> None:
+    """Diagnose the environment: config, DB, ChromaDB, disk, version.
+
+    Each row of the report has a coloured glyph, a one-line status,
+    and an actionable hint when something looks off. Exit code is 0
+    when everything is OK (warnings included), 1 when at least one
+    check fails.
+
+    Usage::
+
+        research doctor
+
+    Safe to run anywhere: no LLM calls, no network.
+    """
+    from research_agent.cli_doctor import run_doctor, safe_load
+
+    cfg = safe_load(console)
+    code = run_doctor(cfg, console)
+    raise typer.Exit(code=code)
+
+
 def main() -> None:
-    """Console script entry point."""
-    app()
+    """Console script entry point with friendly top-level error handling.
+
+    Typer's own exit handling (``typer.Exit``, ``click.UsageError``,
+    keyboard interrupt) is preserved unchanged. Everything else is
+    wrapped so the user sees a single coloured line instead of a
+    bare Python traceback. Set ``RESEARCH_AGENT_DEBUG=1`` to bypass
+    the wrapper when actually debugging.
+    """
+    import os
+
+    debug = bool(os.environ.get("RESEARCH_AGENT_DEBUG"))
+
+    try:
+        app()
+    except (typer.Exit, SystemExit):
+        raise
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        raise SystemExit(130) from None
+    except ConfigError as exc:
+        if debug:
+            raise
+        console.print(f"[red]Config error:[/red] {exc}")
+        console.print(
+            "Hint: run [bold]research config show[/bold] to inspect "
+            "the current configuration."
+        )
+        raise SystemExit(1) from exc
+    except Exception as exc:
+        # Catch-all so the user sees a single friendly line instead
+        # of a 30-line traceback. The original exception is still
+        # raised when RESEARCH_AGENT_DEBUG=1.
+        if debug:
+            raise
+        # Defer the LLMError import — it lives in core.llm which we
+        # don't want eagerly loaded for plain ``--help`` calls. The
+        # isinstance check below stays cheap even when we never hit
+        # an LLM error.
+        try:
+            from research_agent.core.llm import LLMError as _LLMError
+            is_llm_error = isinstance(exc, _LLMError)
+        except ImportError:
+            is_llm_error = False
+        if is_llm_error:
+            console.print(f"[red]LLM error:[/red] {exc}")
+            console.print(
+                "Hint: check [bold]research config show[/bold] and your "
+                "network connection. Run with [bold]RESEARCH_AGENT_DEBUG=1[/bold] "
+                "for the full traceback."
+            )
+        else:
+            console.print(
+                f"[red]Unexpected error:[/red] {type(exc).__name__}: {exc}"
+            )
+            console.print(
+                "Run with [bold]RESEARCH_AGENT_DEBUG=1[/bold] to see the "
+                "full traceback, or open an issue at "
+                "https://github.com/ynsun-tw/research-helper/issues."
+            )
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

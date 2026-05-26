@@ -167,14 +167,51 @@ positional encodings?"` → `recall_history` then a synthesized recap.
 `"what should I search next?"` → `suggest_search_refinement` →
 `search_arxiv`. `"how am I doing this month?"` → `research_insights`.
 
-## Quick start
+## Quick start (5 minutes)
 
 ```bash
-research config set api_key sk-or-...
-research                                     # enter the conversational REPL
-research insights --since 30d                # Markdown summary of recent activity
-research insights --output report.md         # write the report to a file
+# 1. Install (pick one)
+pipx install --index-url https://test.pypi.org/simple/ \
+             --pip-args="--extra-index-url https://pypi.org/simple/" \
+             paper-research-agent
+#  or  →  pip install -e ".[dev]" from the repo root for a dev install
+
+# 2. Verify (no API key needed yet)
+research --version            # → research-agent 0.5.0
+research doctor               # → environment health check (config, DB, disk, chromadb)
+
+# 3. Configure
+research config set api_key sk-or-...     # OpenRouter key from https://openrouter.ai/keys
+research config set language zh           # or en (default)
+
+# 4. Drive the REPL
+research                                  # enter the conversational shell
+# inside the REPL:
+›  /search efficient transformer long context
+›  /read 1706.03762
+›  /discuss replace dense attention with top-k sparse attention
+›  /idea save sparse-attention
+›  /exit
+
+# 5. Author with Scribe
+research style train arxiv:2305.14314 arxiv:2301.07041   # learn your voice
+research style fingerprint                                # build the fingerprint
+research write introduction --context "sparse top-k attention" --output intro.md
+research review intro.md --section introduction --interactive
+
+# 6. Diagrams
+research figure --type architecture --desc "three-layer sparse encoder"
+research figure --type result --data "ours 85, baseline 80" --verify
+
+# 7. Sanity checks
+research check intro.md       # self-plagiarism scan against your training corpus
+research insights --since 30d # Markdown rollup of recent activity
 ```
+
+If anything looks off, `research doctor` prints a single Rich table
+with every check, its status, and a one-line hint. Set
+`RESEARCH_AGENT_DEBUG=1` to see the full Python traceback when an
+unexpected error fires (otherwise you only get one coloured line).
 
 ```text
 › /search --mode applied efficient transformer long context

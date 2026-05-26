@@ -332,7 +332,9 @@ def test_cli_figure_dispatch_calls_run_figure(tmp_path: Path, monkeypatch) -> No
         # Minimal duck-type return to satisfy the caller.
         return None
 
-    monkeypatch.setattr("research_agent.cli.run_figure", _fake_run_figure)
+    # Lazy import: research_agent.cli imports run_figure inside the
+    # command body, so we must patch the source module.
+    monkeypatch.setattr("research_agent.cli_figure.run_figure", _fake_run_figure)
     runner = CliRunner()
     res = runner.invoke(
         app,

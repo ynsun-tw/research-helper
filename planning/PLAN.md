@@ -7,9 +7,9 @@
 | M1 | MVP: 论文深度理解 | 2周 | DONE | [m1-paper-understanding.md](milestones/m1-paper-understanding.md) |
 | M2 | Idea 讨论工坊 | 1周 | DONE | [m2-idea-workshop.md](milestones/m2-idea-workshop.md) |
 | M2.5 | Conversational Shell（单入口 REPL + LLM tool calling） | 0.5周 | DONE | 见 [notes.md](notes.md) ADR-006 |
-| M3 | 文献智能搜索 | 3周 | IN PROGRESS | [m3-literature-intelligence.md](milestones/m3-literature-intelligence.md) |
-| M4 | 论文写作助手 | 2周 | PENDING | [m4-writing-assistant.md](milestones/m4-writing-assistant.md) |
-| M5 | 研究自动化与完善 | 4周 | PENDING | [m5-research-automation.md](milestones/m5-research-automation.md) |
+| M3 | 文献智能搜索 | 3周 | DONE | [m3-literature-intelligence.md](milestones/m3-literature-intelligence.md) |
+| M4 | 论文写作助手 | 2周 | DONE | [m4-writing-assistant.md](milestones/m4-writing-assistant.md) |
+| M5 | 研究自动化与完善 | 4周 | DONE (scope trimmed: E5.3 + E5.4 shipped; E5.1 reproduce + E5.2 full TUI deferred) | [m5-research-automation.md](milestones/m5-research-automation.md) |
 
 **总计**: ~12周（3个月，兼职开发）
 
@@ -29,18 +29,18 @@
 | E2.3 | Idea 生命周期管理 | M2 | DONE |
 | E2.5.1 | REPL + slash 工具入口 | M2.5 | DONE |
 | E2.5.2 | LLM tool calling 与 agent loop | M2.5 | DONE |
-| E3.1 | Searcher Agent | M3 | IN PROGRESS（M3.1 切片：search history + dedup 完成） |
-| E3.2 | 搜索流水线与用户审核 | M3 | PENDING |
-| E3.3 | Memory Keeper 完整版 | M3 | PENDING |
-| E3.4 | 主动提醒机制 | M3 | PENDING |
-| E4.1 | 写作风格指纹提取 | M4 | PENDING |
-| E4.2 | Scribe Agent | M4 | PENDING |
-| E4.3 | 写作审查流水线 | M4 | PENDING |
-| E4.4 | Self-Plagiarism 检测 | M4 | PENDING |
-| E5.1 | 代码复现系统 | M5 | PENDING |
-| E5.2 | TUI 完整界面 | M5 | PENDING |
-| E5.3 | 图表生成 | M5 | PENDING |
-| E5.4 | 全系统优化与打磨 | M5 | PENDING |
+| E3.1 | Searcher Agent | M3 | DONE |
+| E3.2 | 搜索流水线与用户审核 | M3 | DONE |
+| E3.3 | Memory Keeper 完整版 | M3 | DONE |
+| E3.4 | 主动提醒机制 | M3 | DONE |
+| E4.1 | 写作风格指纹提取 | M4 | DONE |
+| E4.2 | Scribe Agent | M4 | DONE |
+| E4.3 | 写作审查流水线 | M4 | DONE |
+| E4.4 | Self-Plagiarism 检测 | M4 | DONE |
+| E5.1 | 代码复现系统 | M5 | DEFERRED |
+| E5.2 | TUI 完整界面 | M5 | DEFERRED |
+| E5.3 | 图表生成 | M5 | DONE |
+| E5.4 | 全系统优化与打磨 | M5 | DONE |
 
 ---
 

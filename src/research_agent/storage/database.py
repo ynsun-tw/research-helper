@@ -187,6 +187,52 @@ class Database:
         if sr_rows and "relevance_reason" not in sr_cols:
             self.conn.execute("ALTER TABLE search_results ADD COLUMN relevance_reason TEXT")
 
+        # M5 S5.4.1: query-pattern indexes. We keep these out of the
+        # declarative SCHEMA so legacy databases (which may pre-date
+        # the ``created_at`` / ``updated_at`` columns referenced
+        # below) don't crash at open time. Each index is gated on the
+        # target columns actually existing.
+        idea_cols_now = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(ideas)").fetchall()
+        }
+        if {"updated_at", "created_at"}.issubset(idea_cols_now):
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ideas_updated "
+                "ON ideas(updated_at DESC, created_at DESC)"
+            )
+        if "status" in idea_cols_now:
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ideas_status ON ideas(status)"
+            )
+        if "created_at" in idea_cols_now:
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ideas_created ON ideas(created_at)"
+            )
+
+        paper_cols = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()
+        }
+        if "created_at" in paper_cols:
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_papers_created "
+                "ON papers(created_at DESC)"
+            )
+
+        disc_cols_now = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(discussions)").fetchall()
+        }
+        if {"session_id", "created_at"}.issubset(disc_cols_now):
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_discussions_session_created "
+                "ON discussions(session_id, created_at)"
+            )
+        if "created_at" in disc_cols_now:
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_discussions_created "
+                "ON discussions(created_at)"
+            )
+
     def close(self) -> None:
         self.conn.close()
 
