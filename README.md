@@ -234,6 +234,33 @@ at `~/.research-agent/style/fingerprint.json`. It has three layers:
 `research style show` prints the corpus inventory and (if present)
 the fingerprint summary, side by side.
 
+### Draft a section with Scribe
+
+```bash
+research write abstract --words 250
+research write introduction \
+  --context "this paper studies sparse top-k attention for 32k contexts" \
+  --versions 3 \
+  --output drafts/intro.md
+```
+
+`research write <section>` invokes the Scribe agent, which produces
+**three stylistic variants** by default — *concise*, *technical depth*,
+and *narrative arc* — by issuing the LLM calls in parallel (use
+`--sequential` to disable). Each draft is rendered in its own Rich
+panel with a one-line note explaining how it differs from the others;
+pass `--output drafts.md` to also save the bouquet to disk.
+
+Supported section names (aliases in parentheses): `abstract`,
+`introduction` (`intro`), `related_work` (`related`), `method`
+(`methods` / `approach`), `results` (`experiments` / `evaluation`),
+`discussion`, `conclusion`.
+
+When `~/.research-agent/style/fingerprint.json` exists, the Scribe
+mimics it (sentence length, transitions, hedging vs confidence
+balance, citation format). Without a fingerprint it falls back to
+neutral academic prose and says so in each draft's style note.
+
 ## Development
 
 ```bash

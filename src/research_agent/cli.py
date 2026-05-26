@@ -12,6 +12,8 @@ remain importable so the chat tools and tests can call them directly.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -23,6 +25,7 @@ from research_agent.cli_style import (
     run_style_show,
     run_style_train,
 )
+from research_agent.cli_write import run_write
 from research_agent.config import Config, ConfigError
 from research_agent.core.language import language_label
 from research_agent.core.llm import LLMClient
@@ -173,8 +176,6 @@ def insights(
         db.close()
     markdown = report.to_markdown()
     if output.strip():
-        from pathlib import Path
-
         out_path = Path(output).expanduser()
         out_path.write_text(markdown, encoding="utf-8")
         console.print(f"[green]✓[/green] Wrote insights to [bold]{out_path}[/bold]")
@@ -220,8 +221,6 @@ def style_train(
     src_list = [s for s in (sources or []) if s and s.strip()]
     dir_path = None
     if directory.strip():
-        from pathlib import Path
-
         dir_path = Path(directory).expanduser()
 
     result = run_style_train(
@@ -241,6 +240,69 @@ def style_show() -> None:
     cfg = _load_config()
     code = run_style_show(cfg, console)
     raise typer.Exit(code=code)
+
+
+@app.command("write")
+def write_command(
+    section: str = typer.Argument(
+        ...,
+        help=(
+            "Section to draft: abstract, introduction, related_work, "
+            "method, results, discussion, conclusion (aliases like "
+            "'intro' / 'methods' / 'experiments' are accepted)."
+        ),
+    ),
+    context: str = typer.Option(
+        "",
+        "--context",
+        help=(
+            "Free-form research context for the Scribe (e.g. 'this paper "
+            "studies sparse top-k attention for 32k context'). Used to "
+            "ground the draft."
+        ),
+    ),
+    target_words: int = typer.Option(
+        300,
+        "--words",
+        help="Target word count per draft (±20% tolerance).",
+    ),
+    versions: int = typer.Option(
+        3,
+        "--versions",
+        "-n",
+        help="Number of stylistic variants to generate.",
+    ),
+    output: str = typer.Option(
+        "",
+        "--output",
+        "-o",
+        help="Optional Markdown file to persist all drafts to.",
+    ),
+    sequential: bool = typer.Option(
+        False,
+        "--sequential",
+        help="Issue LLM calls one at a time (default: parallel via thread pool).",
+    ),
+) -> None:
+    """Have Scribe draft a section in your voice.
+
+    Builds N variants (default 3) using the fingerprint at
+    ``~/.research-agent/style/fingerprint.json``. If no fingerprint is
+    available the Scribe falls back to generic academic prose and
+    says so in each draft's style note.
+    """
+    cfg = _ensure_api_key()
+    out_path = Path(output).expanduser() if output.strip() else None
+    run_write(
+        cfg,
+        console,
+        section=section,
+        context=context,
+        target_words=target_words,
+        versions=versions,
+        output=out_path,
+        parallel=not sequential,
+    )
 
 
 @style_app.command("fingerprint")

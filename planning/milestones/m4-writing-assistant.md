@@ -85,7 +85,7 @@
 
 > 价值假设：风格模仿写作让用户感觉是自己在写，而非 AI 替代
 
-### Story S4.2.1 — 章节草稿生成
+### Story S4.2.1 — 章节草稿生成 [x] COMPLETED
 
 **验收条件**:
 - `research write abstract` / `write introduction` / `write related_work` 等命令
@@ -94,11 +94,23 @@
 - 生成速度：< 30s / 版本
 
 **Tasks**:
-- [ ] T4.2.1.1 设计 Scribe System Prompt（基于风格指纹注入写作约束）
-- [ ] T4.2.1.2 实现 `Scribe.generate(section, context, fingerprint) → Draft[]`
-- [ ] T4.2.1.3 实现 `write` CLI 命令，支持所有标准章节类型
-- [ ] T4.2.1.4 实现多版本并行生成（asyncio.gather，3个LLM并发调用）
-- [ ] T4.2.1.5 实现版本差异标注：调用 LLM 概括各版本特点
+- [x] T4.2.1.1 设计 Scribe System Prompt（基于风格指纹注入写作约束）—
+  `prompts/scribe.yaml`：硬约束（模仿指纹微统计 / 标记、不编造数字
+  /citation key、不要 self-reference），JSON 输出 `{draft, style_note}`。
+- [x] T4.2.1.2 实现 `Scribe.generate(section, context, fingerprint) → Draft[]` —
+  `agents/scribe.py`，新增 `Draft` dataclass、`normalize_section`、
+  `_build_user_prompt`、`_format_fingerprint`、`_parse_draft`。
+- [x] T4.2.1.3 实现 `write` CLI 命令，支持所有标准章节类型 —
+  `research write <section> [--context] [--words] [--versions]
+  [--output] [--sequential]`，支持别名（intro / methods /
+  experiments…）。
+- [x] T4.2.1.4 实现多版本并行生成（ThreadPoolExecutor，3 个 LLM 并发调用）—
+  默认 parallel=True，tests 通过 `parallel=False` 走顺序路径以
+  绕开 MockLLMProvider 的非线程安全。
+- [x] T4.2.1.5 实现版本差异标注：每个 variant 由不同的 directive
+  驱动（concise / technical depth / narrative arc），LLM 在
+  `style_note` 字段里自报。22 unit tests 覆盖 dispatch、解析、
+  fingerprint 注入、降级、CLI 输出文件。
 
 ### Story S4.2.2 — 上下文感知写作
 
