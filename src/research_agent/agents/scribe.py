@@ -20,6 +20,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from research_agent.agents.base import AgentResponse, BaseAgent, extract_json
+from research_agent.agents.writing_pipeline import (
+    WritingReview,
+    build_revision_prompt,
+)
 from research_agent.style.fingerprint import Fingerprint
 
 # Canonical section names that the Scribe knows about.
@@ -191,6 +195,56 @@ class Scribe(BaseAgent):
                 )
             )
         return drafts
+
+    def revise(
+        self,
+        draft: Draft,
+        reviews: list[WritingReview],
+        *,
+        fingerprint: Fingerprint | None = None,
+    ) -> Draft:
+        """Produce a revised draft that addresses ``reviews``.
+
+        Used by the auto-review pipeline (S4.3.1). The revision keeps
+        the same section / target word count / version label as the
+        original; the resulting ``style_note`` records what changed
+        instead of the original voicing label.
+        """
+        # Reviews with nothing actionable shortcut to a no-op revision:
+        # we still return a Draft so downstream code can treat the path
+        # uniformly, but we don't waste an LLM call.
+        if not any(r.issues or r.suggestions or r.summary for r in reviews):
+            return Draft(
+                section=draft.section,
+                version=draft.version,
+                variant_label=draft.variant_label,
+                text=draft.text,
+                style_note="No actionable review feedback - draft unchanged.",
+                word_count=draft.word_count,
+                target_words=draft.target_words,
+            )
+
+        prompt = build_revision_prompt(draft=draft, reviews=reviews)
+        # Prepend a compact fingerprint reminder so the revised draft
+        # doesn't drift in voice while addressing the feedback.
+        if fingerprint is not None and fingerprint.sample_count > 0:
+            prompt = (
+                "Style fingerprint to keep matching:\n"
+                + _format_fingerprint(fingerprint)
+                + "\n\n"
+                + prompt
+            )
+        raw = self._chat(prompt, temperature=0.5)
+        text, note = _parse_draft(raw)
+        return Draft(
+            section=draft.section,
+            version=draft.version,
+            variant_label=draft.variant_label,
+            text=text,
+            style_note=note or "Revised in response to reviewer feedback.",
+            word_count=len(text.split()),
+            target_words=draft.target_words,
+        )
 
 
 # ---------------------------------------------------------------- prompt build

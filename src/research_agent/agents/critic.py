@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from research_agent.agents.base import AgentResponse, BaseAgent, extract_json
+from research_agent.agents.writing_pipeline import (
+    WritingReview,
+    build_review_prompt,
+    parse_review,
+)
 from research_agent.core.debate_prompts import idea_debate_user_prompt
 from research_agent.core.paper import Paper
 
@@ -84,6 +89,18 @@ class Critic(BaseAgent):
         )
         raw = self._chat(prompt, temperature=0.3)
         return _parse_followup_conclusion(raw)
+
+    def review_writing(self, draft_text: str, section: str) -> WritingReview:
+        """Review a Scribe draft for overclaim / unsupported conclusions.
+
+        Caller is expected to instantiate this Critic with
+        ``prompt_stem="critic_writing"`` so the system prompt is the
+        writing-review variant (see
+        :mod:`research_agent.agents.writing_pipeline`).
+        """
+        prompt = build_review_prompt(draft_text=draft_text, section=section)
+        raw = self._chat(prompt, temperature=0.3)
+        return parse_review("critic", raw)
 
 
 def _paper_prompt(paper: Paper) -> str:

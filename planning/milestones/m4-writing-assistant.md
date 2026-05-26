@@ -144,7 +144,7 @@
 
 > 价值假设：Scribe → Analyst+Critic → Scribe 的循环让写作质量迭代提升
 
-### Story S4.3.1 — 自动审查循环
+### Story S4.3.1 — 自动审查循环 [x] COMPLETED
 
 **验收条件**:
 - Scribe 生成草稿后，自动触发 Analyst 和 Critic 并行审查
@@ -153,11 +153,29 @@
 - Scribe 根据审查意见生成修订版本
 
 **Tasks**:
-- [ ] T4.3.1.1 实现 `Orchestrator.writing_review_pipeline(draft) → ReviewedDraft`
-- [ ] T4.3.1.2 实现 Analyst 写作审查模式（`analyze_writing` vs `analyze_paper`，Prompt 不同）
-- [ ] T4.3.1.3 实现 Critic 写作审查模式（专注于 overclaim 和逻辑漏洞）
-- [ ] T4.3.1.4 实现 Scribe 修订：基于审查意见生成改进版本
-- [ ] T4.3.1.5 集成测试：端到端写作审查流程
+- [x] T4.3.1.1 实现 `Orchestrator.writing_review_pipeline(draft) → ReviewedDraft` —
+  `agents/orchestrator.py` 新增 `writing_review_pipeline_async`，
+  通过 `asyncio.gather` + `asyncio.to_thread` 并行调用两位
+  reviewer，再串行调用 `Scribe.revise`；同步 wrapper 留给 CLI。
+- [x] T4.3.1.2 实现 Analyst 写作审查模式 —
+  新 prompt `prompts/analyst_writing.yaml`（聚焦论点充分性 /
+  related work 区分 / evidence-claim 对齐 / 缺失上下文），
+  `Analyst.review_writing` 复用 BaseAgent._chat。
+- [x] T4.3.1.3 实现 Critic 写作审查模式 —
+  新 prompt `prompts/critic_writing.yaml`（聚焦 overclaim /
+  unsupported conclusion / logical gap / hedging mismatch /
+  self-contradiction），`Critic.review_writing`。
+- [x] T4.3.1.4 实现 Scribe 修订 —
+  `Scribe.revise(draft, reviews, fingerprint)`，当所有 review
+  都空时短路（节省 LLM 调用）；带 fingerprint 时在 prompt 顶
+  部塞入简短风格提示防止 voice drift。
+- [x] T4.3.1.5 集成测试 — `tests/unit/test_writing_pipeline.py` +
+  `tests/unit/test_cli_review.py` 共 17 用例，覆盖 prompt 构造、
+  review 解析、Analyst/Critic LLM 调用、Scribe revise（含 no-op /
+  unparseable / 完整 round trip）、Orchestrator 端到端、CLI
+  dispatch + output 持久化、空 draft 报错。新增
+  `agents/writing_pipeline.py` 承载 `WritingReview` / `ReviewedDraft`
+  数据类型 + helpers（TYPE_CHECKING 解决与 scribe 的循环引用）。
 
 ### Story S4.3.2 — 用户选择与反馈
 

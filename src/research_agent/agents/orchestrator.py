@@ -10,10 +10,13 @@ from research_agent.agents.analyst import AnalysisResult, Analyst, IdeaSupportRe
 from research_agent.agents.base import AgentResponse
 from research_agent.agents.critic import Critic, CritiqueResult
 from research_agent.agents.debate import DebateHistory, DebateResult, FollowUpResult
+from research_agent.agents.scribe import Draft, Scribe
+from research_agent.agents.writing_pipeline import ReviewedDraft, WritingReview
 from research_agent.core.language import DEFAULT_LANGUAGE
 from research_agent.core.llm import LLMProvider
 from research_agent.core.paper import Paper, Section
 from research_agent.memory.working_memory import DEFAULT_MAX_CONTEXT_TOKENS, WorkingMemory
+from research_agent.style.fingerprint import Fingerprint
 
 
 @dataclass(slots=True)
@@ -69,6 +72,13 @@ class Orchestrator:
         )
         self.idea_critic_followup = Critic(
             llm, language=language, prompt_stem="critic_idea_followup"
+        )
+        # M4 S4.3.1: dedicated writing-review system prompts.
+        self.writing_analyst = Analyst(
+            llm, language=language, prompt_stem="analyst_writing"
+        )
+        self.writing_critic = Critic(
+            llm, language=language, prompt_stem="critic_writing"
         )
 
     def route(self, command: str, context: dict[str, Any] | None = None) -> Task:
@@ -248,6 +258,43 @@ class Orchestrator:
             critic_conclusion=critic_text,
         )
 
+    async def writing_review_pipeline_async(
+        self,
+        scribe: Scribe,
+        draft: Draft,
+        *,
+        fingerprint: Fingerprint | None = None,
+    ) -> ReviewedDraft:
+        """Run the full Scribe → Analyst+Critic → Scribe cycle.
+
+        Reviews run in parallel via ``asyncio.gather``. The revision
+        step is a single LLM call after both reviews finish.
+        """
+        analyst_review, critic_review = await asyncio.gather(
+            asyncio.to_thread(
+                self.writing_analyst.review_writing, draft.text, draft.section
+            ),
+            asyncio.to_thread(
+                self.writing_critic.review_writing, draft.text, draft.section
+            ),
+        )
+        reviews: list[WritingReview] = [analyst_review, critic_review]
+        revised = await asyncio.to_thread(
+            scribe.revise, draft, reviews, fingerprint=fingerprint
+        )
+        return ReviewedDraft(original=draft, reviews=reviews, revised=revised)
+
+    def writing_review_pipeline(
+        self,
+        scribe: Scribe,
+        draft: Draft,
+        *,
+        fingerprint: Fingerprint | None = None,
+    ) -> ReviewedDraft:
+        """Sync wrapper around :meth:`writing_review_pipeline_async`."""
+        return asyncio.run(
+            self.writing_review_pipeline_async(scribe, draft, fingerprint=fingerprint)
+        )
 
     def extract_search_context(
         self,

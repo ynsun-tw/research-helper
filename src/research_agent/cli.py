@@ -20,6 +20,7 @@ from rich.table import Table
 
 from research_agent.agents.meta_memory import MetaMemory
 from research_agent.chat import run_chat
+from research_agent.cli_review import run_review
 from research_agent.cli_style import (
     run_style_fingerprint,
     run_style_show,
@@ -318,6 +319,58 @@ def write_command(
         versions=versions,
         output=out_path,
         parallel=not sequential,
+    )
+
+
+@app.command("review")
+def review_command(
+    draft_file: str = typer.Argument(
+        ...,
+        help="Path to a Markdown / text file containing the draft to review.",
+    ),
+    section: str = typer.Option(
+        "introduction",
+        "--section",
+        help=(
+            "Which section the draft is from (abstract, introduction, "
+            "related_work, method, results, discussion, conclusion). "
+            "Drives the reviewer prompts."
+        ),
+    ),
+    target_words: int = typer.Option(
+        0,
+        "--words",
+        help=(
+            "Target word count the revised draft should aim for. "
+            "Defaults to the original draft's length."
+        ),
+    ),
+    output: str = typer.Option(
+        "",
+        "--output",
+        "-o",
+        help="Optional Markdown file to persist the review bundle to.",
+    ),
+) -> None:
+    """Run the auto-review pipeline: Scribe → Analyst+Critic → Scribe.
+
+    Analyst flags weak argumentation and missing differentiation from
+    related work; Critic flags overclaim and unsupported conclusions;
+    Scribe produces a revised draft that addresses both reviews.
+    """
+    cfg = _ensure_api_key()
+    path = Path(draft_file).expanduser()
+    if not path.exists():
+        console.print(f"[red]Error:[/red] {path} does not exist.")
+        raise typer.Exit(code=1)
+    out_path = Path(output).expanduser() if output.strip() else None
+    run_review(
+        cfg,
+        console,
+        draft_path=path,
+        section=section,
+        target_words=target_words,
+        output=out_path,
     )
 
 

@@ -287,6 +287,28 @@ The CLI prints a one-line `Scribe context: user context, 2 related
 idea(s), 1 discussion excerpt(s), 2 draft(s) to stay consistent
 with` summary before the panels so you can see what the agent saw.
 
+### Review a draft (Analyst + Critic → Scribe)
+
+```bash
+research review drafts/intro.md --section introduction --output drafts/intro.review.md
+```
+
+`research review <file>` runs the **auto-review pipeline**:
+
+1. **Analyst (writing mode)** — flags weak argumentation,
+   missing differentiation from related work, evidence-claim
+   gaps, undefined terms.
+2. **Critic (writing mode)** — flags overclaim, unsupported
+   conclusions, logical gaps, hedging mismatch. Runs in parallel
+   with the Analyst (`asyncio.gather`).
+3. **Scribe revision** — produces a single revised draft that
+   addresses both reviews while preserving your fingerprinted
+   voice. Skips the LLM entirely if both reviews come back empty.
+
+The console prints four panels (original draft, analyst review,
+critic review, revised draft); `--output review.md` also writes the
+whole bundle to a Markdown file for diffing.
+
 ## Development
 
 ```bash

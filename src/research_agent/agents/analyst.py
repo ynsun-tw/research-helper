@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from research_agent.agents.base import AgentResponse, BaseAgent, extract_json
+from research_agent.agents.writing_pipeline import (
+    WritingReview,
+    build_review_prompt,
+    parse_review,
+)
 from research_agent.core.debate_prompts import idea_debate_user_prompt
 from research_agent.core.paper import Paper
 
@@ -95,6 +100,18 @@ class Analyst(BaseAgent):
         )
         raw = self._chat(prompt)
         return _parse_conclusion(raw)
+
+    def review_writing(self, draft_text: str, section: str) -> WritingReview:
+        """Review a Scribe draft for argument sufficiency / differentiation.
+
+        Caller is expected to instantiate this Analyst with
+        ``prompt_stem="analyst_writing"`` so the system prompt targets
+        writing review (see :mod:`research_agent.agents.writing_pipeline`
+        for the prompt format).
+        """
+        prompt = build_review_prompt(draft_text=draft_text, section=section)
+        raw = self._chat(prompt, temperature=0.3)
+        return parse_review("analyst", raw)
 
 
 @dataclass(slots=True)
