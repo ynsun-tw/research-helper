@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from research_agent.core.idea import Idea
+from dataclasses import dataclass
+
+from research_agent.core.idea import Idea, IdeaStatus
 from research_agent.storage.discussion_vectors import (
     INDEXABLE_ROLES,
     DiscussionVectorStore,
@@ -12,6 +14,27 @@ from research_agent.storage.ideas import IdeaRepository
 from research_agent.storage.vector_store import IdeaVectorStore
 
 LOW_SCORE_THRESHOLD = 5.0
+
+# Statuses worth re-surfacing as proactive alerts. "active" is excluded -
+# the user is already aware of those; "shelved" and "waiting" are the
+# ideas they parked and might want to reconsider when a related paper
+# walks back into the conversation. M3 spec S3.4.1 (acceptance criterion
+# 1) calls these out by name.
+DEFAULT_ASSOCIATION_STATUSES: tuple[IdeaStatus, ...] = ("shelved", "waiting")
+DEFAULT_ASSOCIATION_THRESHOLD = 0.8
+
+
+@dataclass(slots=True, frozen=True)
+class Association:
+    """A historical idea surfaced by check_associations.
+
+    ``similarity`` is in ``[0.0, 1.0]`` (higher means more related);
+    callers can use it to decide whether to surface or suppress the
+    alert without re-querying the vector store.
+    """
+
+    idea: Idea
+    similarity: float
 
 
 class MemoryKeeper:
@@ -93,6 +116,77 @@ class MemoryKeeper:
             content=content,
             idea_id=idea_id,
         )
+
+    # ----------------------- proactive associations (T3.4.1.1) -----------
+
+    def check_associations(
+        self,
+        context: str,
+        *,
+        threshold: float = DEFAULT_ASSOCIATION_THRESHOLD,
+        limit: int = 5,
+        statuses: tuple[IdeaStatus, ...] = DEFAULT_ASSOCIATION_STATUSES,
+    ) -> list[Association]:
+        """Return parked/shelved ideas semantically close to ``context``.
+
+        Designed as a low-friction "is this paper we're looking at related
+        to something we set aside?" probe the Orchestrator can call
+        cheaply after /read or /discuss. Behaviour:
+
+        - Vector-store the ``context`` and pull the top-K candidates,
+          over-fetching by 3x so the post-filter (status, threshold)
+          still leaves enough room to fill ``limit``.
+        - Drop any candidate whose similarity is < ``threshold``
+          ([0.0, 1.0]; M3 spec target is 0.8 - configurable per call
+          and via ``memory.alert_threshold`` in :class:`Config`).
+        - Drop candidates whose status isn't in ``statuses`` (default
+          ``("shelved", "waiting")``). Pass ``statuses=()`` to bypass
+          the status filter entirely.
+        - Skip orphaned vector rows (the SQLite row was deleted but the
+          vector hadn't been removed yet).
+
+        Returns at most ``limit`` Associations in similarity order.
+        Empty string / empty store returns ``[]``.
+        """
+        if not context.strip():
+            return []
+        overfetch = max(limit * 3, limit)
+        pairs = self.vectors.query_with_scores(context, limit=overfetch)
+        out: list[Association] = []
+        for iid, score in pairs:
+            if score < threshold:
+                continue
+            idea = self.ideas.get(iid)
+            if idea is None:
+                continue
+            if statuses and idea.status not in statuses:
+                continue
+            out.append(Association(idea=idea, similarity=score))
+            if len(out) >= limit:
+                break
+        return out
+
+    def format_associations(self, associations: list[Association]) -> str:
+        """Compact Rich-markup banner for the Orchestrator to inject.
+
+        Empty input -> empty string so the caller can ``if banner:``
+        check before printing. Format is deliberately quiet (one
+        leading line + one bullet per association) so the alert
+        doesn't dominate the user's screen during a normal /read.
+        """
+        if not associations:
+            return ""
+        lines = [
+            "[bold yellow]Related ideas you parked previously[/bold yellow]"
+        ]
+        for assoc in associations:
+            idea = assoc.idea
+            lines.append(
+                f"- [cyan]{idea.title}[/cyan] "
+                f"({idea.status}, similarity {assoc.similarity:.0%}) — "
+                f"[dim]/idea show {idea.id[:8]}[/dim]"
+            )
+        return "\n".join(lines)
 
     def recall_history(
         self,

@@ -161,7 +161,7 @@
 - 误报率 < 20%（通过阈值调优）
 
 **Tasks**:
-- [ ] T3.4.1.1 实现 `MemoryKeeper.check_associations(current_context) → Association[]`
+- [x] T3.4.1.1 实现 `MemoryKeeper.check_associations(context, threshold=0.8, limit=5, statuses=("shelved","waiting"))` 返回 `Association(idea, similarity)`；over-fetch 3× 然后按 threshold + status 过滤；orphan vector 行（SQL 行已删）自动跳过；空 context 返回 []。配套 `IdeaVectorStore.query_with_scores` 把 Chroma cosine distance / Jaccard 都统一映射到 `[0,1]` 区间。`format_associations` 生成简洁 Rich 提示行（一条 idea 一行，含相似度 % + 状态 + `/idea show <prefix>` 跳转）。15 个单测 + 3 个 vector store 契约测试，见 `tests/unit/test_memory_keeper.py`。
 - [ ] T3.4.1.2 实现提醒注入：Orchestrator 在输出前检查并附加提醒
 - [ ] T3.4.1.3 实现相似度阈值配置（`config set memory.alert_threshold 0.8`）
 - [ ] T3.4.1.4 集成测试：构造历史 Idea + 相关新讨论，验证提醒触发

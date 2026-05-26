@@ -64,24 +64,60 @@ class IdeaVectorStore:
         exclude_id: str | None = None,
     ) -> list[str]:
         """Return idea ids ranked by similarity to ``text``."""
+        return [
+            iid
+            for iid, _score in self.query_with_scores(
+                text, limit=limit, exclude_id=exclude_id
+            )
+        ]
+
+    def query_with_scores(
+        self,
+        text: str,
+        *,
+        limit: int = 5,
+        exclude_id: str | None = None,
+    ) -> list[tuple[str, float]]:
+        """Return ``(idea_id, similarity)`` pairs ranked by similarity.
+
+        ``similarity`` is normalised to ``[0.0, 1.0]`` (higher == closer)
+        regardless of backend - Chroma's cosine *distance* is mapped to
+        ``1.0 - distance`` and the keyword fallback already emits a
+        Jaccard ratio in that range. Pairs are sorted descending. The
+        threshold-based callers (MemoryKeeper.check_associations) rely
+        on this uniform scoring.
+        """
         if self._use_chroma:
             coll = self._ensure_collection()
             if coll is not self:
                 n = max(limit + (1 if exclude_id else 0), limit)
-                result = coll.query(query_texts=[text], n_results=n)
+                result = coll.query(
+                    query_texts=[text], n_results=n
+                )
                 ids: list[str] = list(result.get("ids", [[]])[0])
+                distances: list[float] = list(
+                    result.get("distances", [[]])[0] or []
+                )
+                pairs = [
+                    (iid, 1.0 - float(dist))
+                    for iid, dist in zip(ids, distances, strict=False)
+                ]
                 if exclude_id:
-                    ids = [i for i in ids if i != exclude_id]
-                return ids[:limit]
-        return self._fallback_query(text, limit=limit, exclude_id=exclude_id)
+                    pairs = [(i, s) for i, s in pairs if i != exclude_id]
+                # Clamp to [0,1] in case of numerical edge cases.
+                pairs = [(i, max(0.0, min(1.0, s))) for i, s in pairs]
+                return pairs[:limit]
+        return self._fallback_query_with_scores(
+            text, limit=limit, exclude_id=exclude_id
+        )
 
-    def _fallback_query(
+    def _fallback_query_with_scores(
         self,
         text: str,
         *,
         limit: int,
         exclude_id: str | None,
-    ) -> list[str]:
+    ) -> list[tuple[str, float]]:
         query_tokens = _tokenize(text)
         if not query_tokens:
             return []
@@ -96,4 +132,4 @@ class IdeaVectorStore:
             if overlap > 0:
                 scored.append((overlap, iid))
         scored.sort(reverse=True)
-        return [iid for _, iid in scored[:limit]]
+        return [(iid, score) for score, iid in scored[:limit]]
