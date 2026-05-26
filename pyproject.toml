@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paper-research-agent"
-version = "0.3.0"
-description = "Local-first multi-agent CLI for research paper understanding, critical debate, and literature intelligence."
+version = "0.4.0"
+description = "Local-first multi-agent CLI for research paper understanding, critical debate, literature intelligence, and Scribe-powered writing assistance."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
