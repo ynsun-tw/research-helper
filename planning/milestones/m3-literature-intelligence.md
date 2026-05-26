@@ -62,10 +62,10 @@
 - 支持搜索策略调整：更理论/更应用/特定作者组
 
 **Tasks**:
-- [ ] T3.1.3.1 设计 Searcher System Prompt（角色：全面、系统、诚实，承认局限）
-- [ ] T3.1.3.2 实现 `Searcher.score_relevance(paper, query_context) → float`（LLM 评分）
-- [ ] T3.1.3.3 实现搜索策略参数（`--mode theoretical/applied/group:<author>`）
-- [ ] T3.1.3.4 集成测试：对比 LLM 相关度评分与人工评分的一致性
+- [x] T3.1.3.1 Searcher system prompt（`prompts/searcher.yaml`，含 0-1 分数分档 + 诚实规则）
+- [x] T3.1.3.2 `Searcher.score_hits(query, hits) → list[ArxivSearchHit]` 批量给所有候选 LLM 评分，写到 `relevance_score` / `relevance_reason` 字段并按分数降序持久化（`/search` / `/history` / `recent_searches` 全部按相关度排序）
+- [ ] T3.1.3.3 搜索策略参数（`--mode theoretical/applied/group:<author>`）
+- [ ] T3.1.3.4 集成测试：对比 LLM 相关度评分与人工评分的一致性（单元层面已覆盖 clamp / parse / fallback / sort，见 `tests/unit/test_searcher.py`）
 
 ---
 

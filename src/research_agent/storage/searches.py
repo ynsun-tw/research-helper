@@ -28,6 +28,8 @@ class StoredSearchHit:
     abstract: str
     published: str
     rank: int
+    relevance_score: float | None = None
+    relevance_reason: str = ""
     read: bool = False  # populated by SearchRepository.recent_hits via join
 
     def to_arxiv_hit(self) -> ArxivSearchHit:
@@ -36,6 +38,8 @@ class StoredSearchHit:
             title=self.title,
             abstract=self.abstract,
             published=self.published,
+            relevance_score=self.relevance_score,
+            relevance_reason=self.relevance_reason,
         )
 
 
@@ -63,8 +67,21 @@ class SearchRepository:
         source: str = "arxiv",
         session_id: str | None = None,
     ) -> str:
-        """Insert a new query + its hits in one transaction. Returns query id."""
+        """Insert a new query + its hits in one transaction. Returns query id.
+
+        Hits may carry ``relevance_score`` / ``relevance_reason`` (set by the
+        Searcher agent); when present, ``rank`` is assigned by descending score
+        so /history and recent_searches surface the strongest matches first.
+        """
         query_id = str(uuid.uuid4())
+        ordered = list(enumerate(hits))
+        if any(h.relevance_score is not None for h in hits):
+            ordered.sort(
+                key=lambda pair: (
+                    -(pair[1].relevance_score or 0.0),
+                    pair[0],
+                )
+            )
         with self.db.conn:
             self.db.conn.execute(
                 """
@@ -73,12 +90,13 @@ class SearchRepository:
                 """,
                 (query_id, session_id, query, source),
             )
-            for rank, hit in enumerate(hits, start=1):
+            for rank, (_, hit) in enumerate(ordered, start=1):
                 self.db.conn.execute(
                     """
                     INSERT INTO search_results
-                        (id, query_id, arxiv_id, title, abstract, published, rank)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (id, query_id, arxiv_id, title, abstract, published,
+                         rank, relevance_score, relevance_reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid.uuid4()),
@@ -88,6 +106,8 @@ class SearchRepository:
                         hit.abstract,
                         hit.published,
                         rank,
+                        hit.relevance_score,
+                        hit.relevance_reason,
                     ),
                 )
         return query_id
@@ -132,7 +152,8 @@ class SearchRepository:
         placeholders = ",".join("?" for _ in query_ids)
         hit_rows = self.db.conn.execute(
             f"""
-            SELECT query_id, arxiv_id, title, abstract, published, rank
+            SELECT query_id, arxiv_id, title, abstract, published, rank,
+                   relevance_score, relevance_reason
               FROM search_results
              WHERE query_id IN ({placeholders})
              ORDER BY rank ASC
@@ -145,6 +166,7 @@ class SearchRepository:
 
         by_query: dict[str, list[StoredSearchHit]] = {qid: [] for qid in query_ids}
         for h in hit_rows:
+            relevance = h["relevance_score"]
             by_query[h["query_id"]].append(
                 StoredSearchHit(
                     arxiv_id=h["arxiv_id"],
@@ -152,6 +174,8 @@ class SearchRepository:
                     abstract=h["abstract"] or "",
                     published=h["published"] or "",
                     rank=int(h["rank"]) if h["rank"] is not None else 0,
+                    relevance_score=float(relevance) if relevance is not None else None,
+                    relevance_reason=h["relevance_reason"] or "",
                     read=h["arxiv_id"] in already_read,
                 )
             )

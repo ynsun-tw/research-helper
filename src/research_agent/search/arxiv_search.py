@@ -26,6 +26,8 @@ class ArxivSearchHit:
     title: str
     abstract: str
     published: str = ""
+    relevance_score: float | None = None
+    relevance_reason: str = ""
 
 
 class ArxivSearcher:

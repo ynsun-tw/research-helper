@@ -75,13 +75,15 @@ CREATE INDEX IF NOT EXISTS idx_search_queries_created
     ON search_queries(created_at);
 
 CREATE TABLE IF NOT EXISTS search_results (
-    id          TEXT PRIMARY KEY,
-    query_id    TEXT NOT NULL,
-    arxiv_id    TEXT NOT NULL,
-    title       TEXT NOT NULL,
-    abstract    TEXT,
-    published   TEXT,
-    rank        INTEGER,
+    id                TEXT PRIMARY KEY,
+    query_id          TEXT NOT NULL,
+    arxiv_id          TEXT NOT NULL,
+    title             TEXT NOT NULL,
+    abstract          TEXT,
+    published         TEXT,
+    rank              INTEGER,
+    relevance_score   REAL,
+    relevance_reason  TEXT,
     FOREIGN KEY (query_id) REFERENCES search_queries(id) ON DELETE CASCADE
 );
 
@@ -123,6 +125,14 @@ class Database:
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_discussions_idea ON discussions(idea_id)"
             )
+
+        # M3 task 1: relevance scoring on search_results
+        sr_rows = self.conn.execute("PRAGMA table_info(search_results)").fetchall()
+        sr_cols = {row[1] for row in sr_rows}
+        if sr_rows and "relevance_score" not in sr_cols:
+            self.conn.execute("ALTER TABLE search_results ADD COLUMN relevance_score REAL")
+        if sr_rows and "relevance_reason" not in sr_cols:
+            self.conn.execute("ALTER TABLE search_results ADD COLUMN relevance_reason TEXT")
 
     def close(self) -> None:
         self.conn.close()

@@ -114,7 +114,7 @@ def llm_tool_schemas() -> list[dict[str, Any]]:
 
 @slash(
     "search",
-    summary="Search arXiv by keywords (logs to history; flags already-read).",
+    summary="Search arXiv + LLM relevance score (logs to history; flags already-read).",
     usage="/search <keywords>",
 )
 def cmd_search(session: ChatSession, args: str) -> None:
@@ -127,16 +127,47 @@ def cmd_search(session: ChatSession, args: str) -> None:
     except (PaperLoadError, ArxivSearchError) as exc:
         session.console.print(f"[red]Error:[/red] {exc}")
         return
+    if not hits:
+        session.console.print(f"[yellow]No results for[/yellow] {args!r}.")
+        session.searches.record(
+            args, hits, source="arxiv", session_id=session.memory.session_id
+        )
+        session.memory.append("system", _search_summary(args, hits))
+        return
 
+    scored = _score_hits(session, args, hits)
     session.searches.record(
-        args, hits, source="arxiv", session_id=session.memory.session_id
+        args, scored, source="arxiv", session_id=session.memory.session_id
     )
-    already_read = session.searches.already_read([h.arxiv_id for h in hits])
-    _render_search_hits(session, args, hits, already_read=already_read)
+    sorted_hits = _sort_by_score(scored)
+    already_read = session.searches.already_read([h.arxiv_id for h in sorted_hits])
+    _render_search_hits(session, args, sorted_hits, already_read=already_read)
     session.memory.append(
         "system",
-        _search_summary(args, hits, already_read=already_read),
+        _search_summary(args, sorted_hits, already_read=already_read),
     )
+
+
+def _score_hits(
+    session: ChatSession,
+    query: str,
+    hits: list[ArxivSearchHit],
+) -> list[ArxivSearchHit]:
+    try:
+        with session.console.status("[bold]Scoring relevance (LLM)…[/bold]"):
+            return session.searcher.score_hits(query, hits)
+    except LLMError as exc:
+        session.console.print(
+            f"[yellow]Relevance scoring failed:[/yellow] {exc}. "
+            "Showing unscored arXiv order."
+        )
+        return list(hits)
+
+
+def _sort_by_score(hits: list[ArxivSearchHit]) -> list[ArxivSearchHit]:
+    if not any(h.relevance_score is not None for h in hits):
+        return list(hits)
+    return sorted(hits, key=lambda h: -(h.relevance_score or 0.0))
 
 
 def _render_search_hits(
@@ -147,20 +178,46 @@ def _render_search_hits(
     already_read: set[str] | None = None,
 ) -> None:
     already_read = already_read or set()
+    show_score = any(h.relevance_score is not None for h in hits)
     table = Table(title=f"arXiv results for: {query}", show_header=True)
     table.add_column("ID", style="cyan")
     table.add_column("Title")
     table.add_column("Year", justify="right")
+    if show_score:
+        table.add_column("Score", justify="right")
+        table.add_column("Why", style="dim")
     table.add_column("Read", justify="center")
     for hit in hits:
         year = hit.published[:4] if hit.published else "—"
         read_mark = "[green]✓[/green]" if hit.arxiv_id in already_read else ""
-        table.add_row(hit.arxiv_id, hit.title[:80], year, read_mark)
+        if show_score:
+            score_cell = (
+                f"{hit.relevance_score:.2f}"
+                if hit.relevance_score is not None
+                else "—"
+            )
+            reason = hit.relevance_reason or ""
+            if len(reason) > 60:
+                reason = reason[:57] + "…"
+            table.add_row(
+                hit.arxiv_id,
+                hit.title[:80],
+                year,
+                score_cell,
+                reason,
+                read_mark,
+            )
+        else:
+            table.add_row(hit.arxiv_id, hit.title[:80], year, read_mark)
     session.console.print(table)
-    session.console.print(
-        "[dim]Use[/dim] /read <id> [dim]to load one;[/dim] "
-        "[green]✓[/green] [dim]= already in your local library.[/dim]"
+    extras = []
+    if show_score:
+        extras.append("[dim]Sorted by relevance (LLM, 0-1).[/dim]")
+    extras.append(
+        "[dim]Use[/dim] /read <id> [dim]to load;[/dim] "
+        "[green]✓[/green] [dim]= already in your library.[/dim]"
     )
+    session.console.print(" ".join(extras))
 
 
 def _search_summary(
@@ -175,7 +232,10 @@ def _search_summary(
     rows: list[str] = []
     for h in hits:
         marker = " [read]" if h.arxiv_id in read_set else ""
-        rows.append(f"- {h.arxiv_id}: {h.title[:80]}{marker}")
+        score_str = (
+            f" score={h.relevance_score:.2f}" if h.relevance_score is not None else ""
+        )
+        rows.append(f"- {h.arxiv_id}: {h.title[:80]}{score_str}{marker}")
     return f"Searched arXiv for {query!r}; {len(hits)} results:\n" + "\n".join(rows)
 
 
@@ -208,12 +268,19 @@ def exec_search_arxiv(session: ChatSession, args: dict[str, Any]) -> str:
             hits = search_arxiv_papers(query, max_results=max_results)
     except (PaperLoadError, ArxivSearchError) as exc:
         return f"Error: {exc}"
+    if not hits:
+        session.searches.record(
+            query, hits, source="arxiv", session_id=session.memory.session_id
+        )
+        return _search_summary(query, hits)
+    scored = _score_hits(session, query, hits)
     session.searches.record(
-        query, hits, source="arxiv", session_id=session.memory.session_id
+        query, scored, source="arxiv", session_id=session.memory.session_id
     )
-    already_read = session.searches.already_read([h.arxiv_id for h in hits])
-    _render_search_hits(session, query, hits, already_read=already_read)
-    return _search_summary(query, hits, already_read=already_read)
+    sorted_hits = _sort_by_score(scored)
+    already_read = session.searches.already_read([h.arxiv_id for h in sorted_hits])
+    _render_search_hits(session, query, sorted_hits, already_read=already_read)
+    return _search_summary(query, sorted_hits, already_read=already_read)
 
 
 # ---------------------------------------------------------------- history
@@ -282,8 +349,13 @@ def _history_summary_text(queries: list[StoredSearchQuery]) -> str:
         for h in q.hits:
             year = h.published[:4] if h.published else "—"
             mark = " [READ]" if h.read else ""
+            score = (
+                f" score={h.relevance_score:.2f}"
+                if h.relevance_score is not None
+                else ""
+            )
             title = h.title if len(h.title) <= 100 else h.title[:97] + "…"
-            lines.append(f"   - {h.arxiv_id} ({year}) {title}{mark}")
+            lines.append(f"   - {h.arxiv_id} ({year}){score} {title}{mark}")
     return "\n".join(lines)
 
 

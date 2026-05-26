@@ -16,6 +16,7 @@ from rich.console import Console
 from research_agent.agents.debate import DebateHistory
 from research_agent.agents.memory_keeper import MemoryKeeper
 from research_agent.agents.orchestrator import Orchestrator
+from research_agent.agents.searcher import Searcher
 from research_agent.config import Config
 from research_agent.core.llm import LLMProvider
 from research_agent.core.paper import Paper
@@ -44,6 +45,7 @@ class ChatSession:
     vectors: IdeaVectorStore
     keeper: MemoryKeeper
     orch: Orchestrator
+    searcher: Searcher
     memory: WorkingMemory
 
     anchor_paper: Paper | None = None
@@ -74,6 +76,7 @@ class ChatSession:
         vectors = IdeaVectorStore(cfg.chroma_dir, use_chroma=use_chroma)
         keeper = MemoryKeeper(ideas, vectors)
         orch = Orchestrator(llm, language=cfg.language)
+        searcher = Searcher(llm, language=cfg.language)
         memory = WorkingMemory.new_session()
         return cls(
             cfg=cfg,
@@ -88,6 +91,7 @@ class ChatSession:
             vectors=vectors,
             keeper=keeper,
             orch=orch,
+            searcher=searcher,
             memory=memory,
         )
 
