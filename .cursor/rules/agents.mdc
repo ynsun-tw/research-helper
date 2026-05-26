@@ -25,5 +25,16 @@ alwaysApply: false
 
 ## LLM output
 
-- Prompts require JSON-only replies; parse with `extract_json()` in `base.py`.
-- On parse failure, raise `ValueError` — callers map to user-friendly errors.
+- Prompts require JSON-only replies. Parse them via a typed Pydantic v2
+  model from `research_agent.agents.schemas`, using `parse_model(raw, Model)`.
+  Each agent owns one (or a few) schema in that module.
+- New schemas should: set `extra="ignore"`, default every field, and use
+  `mode="before"` `field_validator`s to coerce wrong-type lists / clamp
+  numeric ranges. This preserves the project's "tolerant parser" contract.
+- `parse_model` raises `ValueError` (Pydantic `ValidationError` is a
+  `ValueError` subclass) on both JSON-decode and schema-validation
+  failures — callers either propagate it (paper analysis path) or catch
+  it for a graceful fallback (Scribe / Searcher / Illustrator paths).
+- Need the raw JSON envelope for an unusual case (e.g. detecting which
+  keys the LLM emitted)? Use `schemas.strip_to_json()` directly. Do not
+  reinstate `extract_json`.

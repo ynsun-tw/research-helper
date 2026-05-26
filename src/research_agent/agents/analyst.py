@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from research_agent.agents.base import AgentResponse, BaseAgent, extract_json
+from research_agent.agents.base import AgentResponse, BaseAgent
+from research_agent.agents.schemas import (
+    AnalysisPayload,
+    ConclusionPayload,
+    IdeaSupportPayload,
+    parse_model,
+)
 from research_agent.agents.writing_pipeline import (
     WritingReview,
     build_review_prompt,
@@ -124,30 +130,21 @@ class IdeaSupportResult:
 
 
 def _parse_conclusion(raw: str) -> str:
-    data = extract_json(raw)
-    text = str(data.get("conclusion", "")).strip()
-    if text:
-        return text
-    return raw.strip()
+    payload = parse_model(raw, ConclusionPayload)
+    return payload.conclusion or raw.strip()
 
 
 def _parse_idea_support(raw: str) -> IdeaSupportResult:
-    data = extract_json(raw)
-    evidence = []
-    for item in data.get("evidence") or []:
-        if isinstance(item, dict):
-            evidence.append(
-                ClaimedVsEvidence(
-                    claim=str(item.get("claim", item.get("assumption", ""))),
-                    evidence=str(item.get("basis", item.get("evidence", ""))),
-                )
-            )
-    confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
+    payload = parse_model(raw, IdeaSupportPayload)
+    evidence = [
+        ClaimedVsEvidence(claim=item.claim, evidence=item.evidence)
+        for item in payload.evidence
+    ]
     return IdeaSupportResult(
-        supports=_as_str_list(data.get("supports")),
-        suggestions=_as_str_list(data.get("suggestions")),
+        supports=payload.supports,
+        suggestions=payload.suggestions,
         evidence=evidence,
-        confidence=confidence,
+        confidence=payload.confidence,
         raw_response=raw,
     )
 
@@ -168,30 +165,17 @@ def _paper_prompt(paper: Paper) -> str:
 
 
 def _parse_analysis(raw: str) -> AnalysisResult:
-    data = extract_json(raw)
-    pairs = []
-    for item in data.get("claimed_vs_evidence") or []:
-        if isinstance(item, dict):
-            pairs.append(
-                ClaimedVsEvidence(
-                    claim=str(item.get("claim", "")),
-                    evidence=str(item.get("evidence", "")),
-                )
-            )
-    confidence = float(data.get("confidence", 0.5))
-    confidence = max(0.0, min(1.0, confidence))
+    payload = parse_model(raw, AnalysisPayload)
+    pairs = [
+        ClaimedVsEvidence(claim=item.claim, evidence=item.evidence)
+        for item in payload.claimed_vs_evidence
+    ]
     return AnalysisResult(
-        contributions=_as_str_list(data.get("contributions")),
-        method_insights=_as_str_list(data.get("method_insights")),
-        potential_impact=str(data.get("potential_impact", "")),
-        related_work=_as_str_list(data.get("related_work")),
+        contributions=payload.contributions,
+        method_insights=payload.method_insights,
+        potential_impact=payload.potential_impact,
+        related_work=payload.related_work,
         claimed_vs_evidence=pairs,
-        confidence=confidence,
+        confidence=payload.confidence,
         raw_response=raw,
     )
-
-
-def _as_str_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(v) for v in value if v]

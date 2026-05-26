@@ -20,7 +20,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from research_agent.agents.base import AgentResponse, BaseAgent, extract_json
+from research_agent.agents.base import AgentResponse, BaseAgent
+from research_agent.agents.schemas import FigurePayload, parse_model
 
 FIGURE_TYPES: tuple[str, ...] = ("architecture", "result", "concept")
 
@@ -314,14 +315,12 @@ def _parse_figure(raw: str, *, figure_type: str) -> dict[str, str]:
     something rough than to crash.
     """
     try:
-        data = extract_json(raw)
+        payload = parse_model(raw, FigurePayload)
     except ValueError:
         return {"code": raw.strip(), "style_label": "", "notes": "", "suggested_use": ""}
 
-    out: dict[str, str] = {}
-    for key in _REQUIRED_FIELDS_BY_TYPE.get(figure_type, ("code",)):
-        value = data.get(key, "")
-        out[key] = str(value).strip() if value is not None else ""
+    fields = _REQUIRED_FIELDS_BY_TYPE.get(figure_type, ("code",))
+    out: dict[str, str] = {key: getattr(payload, key, "") for key in fields}
     if not out.get("code"):
         out["code"] = raw.strip()
     return out

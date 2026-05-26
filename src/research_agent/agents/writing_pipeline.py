@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from research_agent.agents.base import extract_json
+from research_agent.agents.schemas import WritingReviewPayload, parse_model
 
 if TYPE_CHECKING:
     from research_agent.agents.scribe import Draft
@@ -77,17 +77,14 @@ def parse_review(role: str, raw: str) -> WritingReview:
     items, extra prose around the JSON envelope.
     """
     try:
-        data = extract_json(raw)
+        payload = parse_model(raw, WritingReviewPayload)
     except ValueError:
         return WritingReview(role=role, summary=raw.strip()[:280], raw_response=raw)
-    issues = _as_str_list(data.get("issues"))
-    suggestions = _as_str_list(data.get("suggestions"))
-    summary = str(data.get("summary", "")).strip()
     return WritingReview(
         role=role,
-        issues=issues,
-        suggestions=suggestions,
-        summary=summary,
+        issues=payload.issues,
+        suggestions=payload.suggestions,
+        summary=payload.summary,
         raw_response=raw,
     )
 
@@ -132,9 +129,3 @@ def build_revision_prompt(*, draft: Draft, reviews: list[WritingReview]) -> str:
         "\"style_note\": \"what you changed and why\"}."
     )
     return "\n".join(lines)
-
-
-def _as_str_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(v).strip() for v in value if v]

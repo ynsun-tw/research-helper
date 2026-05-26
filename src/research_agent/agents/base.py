@@ -1,9 +1,13 @@
-"""Base agent abstractions."""
+"""Base agent abstractions.
+
+Structured LLM-output parsing moved to :mod:`research_agent.agents.schemas`
+(Pydantic v2 models + ``parse_model``). The legacy ``extract_json`` helper
+was removed once every agent migrated; if you need the raw envelope use
+``schemas.strip_to_json``.
+"""
 
 from __future__ import annotations
 
-import json
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -58,23 +62,3 @@ class BaseAgent(ABC):
             ChatMessage(role="user", content=user_content),
         ]
         return self.llm.chat(messages, temperature=temperature)
-
-
-def extract_json(text: str) -> dict[str, Any]:
-    """Parse JSON from an LLM reply, tolerating optional markdown fences."""
-    stripped = text.strip()
-    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", stripped, re.DOTALL)
-    if fence:
-        stripped = fence.group(1)
-    else:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start != -1 and end != -1:
-            stripped = stripped[start : end + 1]
-    try:
-        data = json.loads(stripped)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Could not parse JSON from model output: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("Expected a JSON object from model output")
-    return data

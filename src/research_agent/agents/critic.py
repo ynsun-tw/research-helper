@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from research_agent.agents.base import AgentResponse, BaseAgent, extract_json
+from research_agent.agents.base import AgentResponse, BaseAgent
+from research_agent.agents.schemas import (
+    ConclusionPayload,
+    CritiquePayload,
+    parse_model,
+    strip_to_json,
+)
 from research_agent.agents.writing_pipeline import (
     WritingReview,
     build_review_prompt,
@@ -152,36 +159,41 @@ def normalize_score(value: object) -> float:
 
 
 def _parse_critique(raw: str) -> CritiqueResult:
-    data = extract_json(raw)
-    objections = _as_str_list(data.get("objections"))
-    score = parse_support_score(raw, data)
-    score_reason = str(data.get("score_reason", "")).strip()
-    honesty_note = str(data.get("honesty_note", "")).strip()
+    payload = parse_model(raw, CritiquePayload)
+    # Old behaviour: if the JSON envelope didn't carry any score field, sweep
+    # the raw reply for free-text patterns like "Rating: 7/10". We re-parse a
+    # raw dict only to detect presence; the actual normalised value comes from
+    # the Pydantic model otherwise.
+    score = payload.support_score if _score_key_present(raw) else parse_support_score(raw)
 
+    score_reason = payload.score_reason
+    honesty_note = payload.honesty_note
     if score < 7 and not score_reason:
         score_reason = "Score below 7 requires justification; model did not provide score_reason."
-    if not objections and not honesty_note:
+    if not payload.objections and not honesty_note:
         honesty_note = "No substantive objections found; paper appears reasonably sound."
 
     return CritiqueResult(
-        objections=objections,
+        objections=payload.objections,
         support_score=score,
         score_reason=score_reason,
         honesty_note=honesty_note,
-        suggestions=_as_str_list(data.get("suggestions")),
+        suggestions=payload.suggestions,
         raw_response=raw,
     )
 
 
 def _parse_followup_conclusion(raw: str) -> str:
-    data = extract_json(raw)
-    text = str(data.get("conclusion", "")).strip()
-    if text:
-        return text
-    return raw.strip()
+    payload = parse_model(raw, ConclusionPayload)
+    return payload.conclusion or raw.strip()
 
 
-def _as_str_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(v) for v in value if v]
+def _score_key_present(raw: str) -> bool:
+    """Did the LLM's JSON envelope include any score-shaped key?"""
+    try:
+        data = json.loads(strip_to_json(raw))
+    except ValueError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    return any(k in data for k in ("support_score", "score", "rating"))

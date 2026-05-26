@@ -13,7 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from research_agent.agents.base import AgentResponse, BaseAgent, extract_json
+from research_agent.agents.base import AgentResponse, BaseAgent
+from research_agent.agents.schemas import (
+    SearcherRefinementPayload,
+    SearcherScoresPayload,
+    parse_model,
+)
 from research_agent.core.llm import ChatMessage, LLMError
 from research_agent.search.arxiv_search import ArxivSearchHit
 
@@ -65,21 +70,15 @@ class Searcher(BaseAgent):
         prompt = _build_prompt(query, hits)
         try:
             raw = self._chat(prompt, temperature=temperature)
-            data = extract_json(raw)
+            payload = parse_model(raw, SearcherScoresPayload)
         except (LLMError, ValueError):
             return list(hits)
 
         by_index: dict[int, tuple[float, str]] = {}
-        for entry in data.get("scores", []) or []:
-            try:
-                idx = int(entry.get("index"))
-                score = float(entry.get("score"))
-            except (TypeError, ValueError):
+        for entry in payload.scores:
+            if entry.index is None or entry.score is None:
                 continue
-            if not 0.0 <= score <= 1.0:
-                score = max(0.0, min(score, 1.0))
-            reason = str(entry.get("reason", "")).strip()
-            by_index[idx] = (score, reason)
+            by_index[entry.index] = (entry.score, entry.reason)
 
         out: list[ArxivSearchHit] = []
         for i, hit in enumerate(hits, start=1):
@@ -125,36 +124,32 @@ class Searcher(BaseAgent):
                 ChatMessage(role="user", content=prompt),
             ]
             raw = self.llm.chat(messages, temperature=temperature)
-            data = extract_json(raw)
+            payload = parse_model(raw, SearcherRefinementPayload)
         except (LLMError, ValueError):
             return SearchSuggestion(query="", mode=None, reason="", confidence=0.0)
 
-        return _parse_refinement(data)
+        return _parse_refinement(payload)
 
 
-def _parse_refinement(data: dict[str, Any]) -> SearchSuggestion:
-    query = str(data.get("query") or "").strip()
-    raw_mode = data.get("mode")
-    mode: str | None = (
-        None if raw_mode in (None, "") else (str(raw_mode).strip() or None)
-    )
+def _parse_refinement(payload: SearcherRefinementPayload) -> SearchSuggestion:
     # Validate mode shape; unknown values dropped (don't break /search).
+    # The schema already strips/normalises the raw value; we only need to
+    # whitelist against the small set of acceptable shapes here.
+    mode = payload.mode
     if mode is not None:
-        normalized = mode.strip()
-        if normalized.startswith("group:"):
-            author = normalized[len("group:"):].strip()
+        if mode.startswith("group:"):
+            author = mode[len("group:") :].strip()
             mode = f"group:{author}" if author else None
-        elif normalized.lower() in VALID_MODES:
-            mode = normalized.lower()
+        elif mode.lower() in VALID_MODES:
+            mode = mode.lower()
         else:
             mode = None
-    reason = str(data.get("reason") or "").strip()
-    try:
-        confidence = float(data.get("confidence") or 0.0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    confidence = max(0.0, min(1.0, confidence))
-    return SearchSuggestion(query=query, mode=mode, reason=reason, confidence=confidence)
+    return SearchSuggestion(
+        query=payload.query,
+        mode=mode,
+        reason=payload.reason,
+        confidence=payload.confidence,
+    )
 
 
 _REFINEMENT_SYSTEM_PROMPT = """You are Searcher, advising on the *next* literature search.

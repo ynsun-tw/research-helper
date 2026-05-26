@@ -19,7 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from research_agent.agents.base import AgentResponse, BaseAgent, extract_json
+from research_agent.agents.base import AgentResponse, BaseAgent
+from research_agent.agents.schemas import DraftPayload, parse_model
 from research_agent.agents.writing_pipeline import (
     WritingReview,
     build_revision_prompt,
@@ -349,11 +350,8 @@ def _parse_draft(raw: str) -> tuple[str, str]:
     draft in that fallback case).
     """
     try:
-        data = extract_json(raw)
+        payload = parse_model(raw, DraftPayload)
     except ValueError:
         return raw.strip(), ""
-    draft = str(data.get("draft", "")).strip()
-    note = str(data.get("style_note", "")).strip()
-    if not draft:
-        draft = raw.strip()
-    return draft, note
+    draft = payload.draft or raw.strip()
+    return draft, payload.style_note
