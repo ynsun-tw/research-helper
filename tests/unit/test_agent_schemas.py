@@ -28,7 +28,6 @@ from research_agent.agents.schemas import (
     strip_to_json,
 )
 
-
 # ---------------------------------------------------- strip_to_json envelope
 
 
@@ -137,7 +136,8 @@ def test_idea_support_accepts_assumption_basis_aliases() -> None:
 
 def test_conclusion_defaults_to_empty() -> None:
     assert parse_model("{}", ConclusionPayload).conclusion == ""
-    assert parse_model(json.dumps({"conclusion": "  done  "}), ConclusionPayload).conclusion == "done"
+    out = parse_model(json.dumps({"conclusion": "  done  "}), ConclusionPayload)
+    assert out.conclusion == "done"
 
 
 # ----------------------------------------------------------- CritiquePayload
