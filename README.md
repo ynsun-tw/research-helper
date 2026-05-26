@@ -13,9 +13,48 @@ calling — pick whichever feels natural per turn.
 
 ## Install
 
+> Distribution name on PyPI is **`paper-research-agent`** (the
+> Python import name stays `research_agent`). Currently published to
+> Test PyPI while the release stabilises; a production PyPI upload
+> follows once the Test PyPI build has soaked.
+
+### Option A — From Test PyPI (current)
+
+The actual runtime dependencies (PyMuPDF, ChromaDB, openai, …) only
+live on real PyPI, so you need both indexes:
+
 ```bash
+pip install \
+  --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ \
+  paper-research-agent
+```
+
+Or with [pipx](https://pipx.pypa.io/) for an isolated install:
+
+```bash
+pipx install \
+  --index-url https://test.pypi.org/simple/ \
+  --pip-args="--extra-index-url https://pypi.org/simple/" \
+  paper-research-agent
+```
+
+### Option B — From PyPI (once published)
+
+```bash
+pip install paper-research-agent        # or: pipx install paper-research-agent
+```
+
+### Option C — From source (development)
+
+```bash
+git clone https://github.com/ynsun-tw/research-helper.git
+cd research-helper
 pip install -e ".[dev]"
 ```
+
+After any of the above, `research --help` should list the `config`
+and `insights` subcommands and the REPL is one `research` away.
 
 ## Configure
 
