@@ -131,7 +131,7 @@
 - [x] T3.3.1.1 跨会话讨论持久化：`WorkingMemory.persist` 在 SQLite 写入的同时调用可选 indexer，把 user / analyst / critic 三类消息推入 ChromaDB（test/fallback 走 in-memory Jaccard），论文分析结果已在 M1/M2 落到 `papers` 表
 - [x] T3.3.1.2 向量化流水线：新增 `storage/discussion_vectors.py::DiscussionVectorStore`（chroma 持久化目录与 idea 共用 `chroma_dir`），`ChatSession.close()` 自动调用 indexer
 - [x] T3.3.1.3 语义检索：`MemoryKeeper.recall_history(query, limit, exclude_session_id)` + LLM 工具 `recall_history` + slash `/recall`；返回带 role / session_id / 片段的命中并回写控制台
-- [ ] T3.3.1.4 性能测试：1000 条记录下检索延迟验证
+- [x] T3.3.1.4 性能测试：`tests/integration/test_recall_perf.py` 索引 1000 条消息（10 个模拟会话 × 100 条，5 个主题轮换），断言 `DiscussionVectorStore.query_similar` < 500ms，`MemoryKeeper.recall_history`（含 SQLite by-id 取回）< 2s（spec 目标），并验证 top-3 命中确实包含查询主题。跑 in-memory Jaccard fallback（最坏情况），实际跑时 1000 条消息 + 3 测试共 ~1.0s。
 
 ### Story S3.3.2 — 元认知记忆
 
