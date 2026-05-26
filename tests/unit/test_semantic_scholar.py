@@ -12,6 +12,8 @@ import pytest
 from research_agent.search.arxiv_search import ArxivSearchError
 from research_agent.search.semantic_scholar import (
     SemanticScholarSearcher,
+    _format_paper_id,
+    _parse_s2_relations,
     _parse_s2_response,
 )
 
@@ -241,7 +243,7 @@ def test_search_timeout_wraps_into_arxiv_search_error(
     )
     with pytest.raises(ArxivSearchError) as exc_info:
         SemanticScholarSearcher(retries=0, min_request_interval=0).search("x")
-    assert "Semantic Scholar timed out" in str(exc_info.value)
+    assert "Semantic Scholar search timed out" in str(exc_info.value)
 
 
 def test_search_wraps_json_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -252,3 +254,173 @@ def test_search_wraps_json_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ArxivSearchError) as exc_info:
         SemanticScholarSearcher(min_request_interval=0).search("x")
     assert "unparseable" in str(exc_info.value)
+
+
+# ----------------------------- citation graph (T3.1.2.2) ------------------
+
+
+def test_format_paper_id_url_encodes_arxiv_prefix() -> None:
+    assert _format_paper_id("1706.03762") == "ARXIV%3A1706.03762"
+    # Old-format ids contain a slash which would break the path otherwise.
+    assert _format_paper_id("cs.CL/0001001") == "ARXIV%3Acs.CL%2F0001001"
+
+
+def test_format_paper_id_rejects_empty() -> None:
+    with pytest.raises(ArxivSearchError):
+        _format_paper_id("   ")
+
+
+def test_parse_citations_unwraps_citing_paper_field() -> None:
+    payload = json.dumps(
+        {
+            "offset": 0,
+            "data": [
+                {
+                    "contexts": ["foo"],
+                    "citingPaper": {
+                        "paperId": "abc",
+                        "title": "Follow-up paper",
+                        "externalIds": {"ArXiv": "1801.00001"},
+                        "year": 2018,
+                    },
+                },
+                {
+                    "citingPaper": {  # no arxiv mapping -> skipped
+                        "title": "Conference only",
+                        "externalIds": {"DOI": "10.x/y"},
+                    },
+                },
+            ],
+        }
+    ).encode("utf-8")
+    hits = _parse_s2_relations(payload, key="citingPaper")
+    assert [h.arxiv_id for h in hits] == ["1801.00001"]
+    assert hits[0].title == "Follow-up paper"
+
+
+def test_parse_references_unwraps_cited_paper_field() -> None:
+    payload = json.dumps(
+        {
+            "data": [
+                {
+                    "citedPaper": {
+                        "title": "Foundational paper",
+                        "externalIds": {"ArXiv": "1409.0473"},
+                        "year": 2014,
+                    },
+                },
+            ],
+        }
+    ).encode("utf-8")
+    hits = _parse_s2_relations(payload, key="citedPaper")
+    assert hits and hits[0].arxiv_id == "1409.0473"
+
+
+def test_parse_relations_rejects_malformed_payload() -> None:
+    with pytest.raises(ArxivSearchError):
+        _parse_s2_relations(b"[1,2,3]", key="citingPaper")
+    with pytest.raises(ArxivSearchError):
+        _parse_s2_relations(
+            json.dumps({"data": "wrong"}).encode("utf-8"), key="citingPaper"
+        )
+
+
+def test_get_citations_hits_correct_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_urlopen(req: urllib.request.Request, *_a: object, **_kw: object) -> object:
+        captured["url"] = req.full_url
+        return _fake_resp(
+            json.dumps(
+                {
+                    "data": [
+                        {
+                            "citingPaper": {
+                                "title": "Cite me",
+                                "externalIds": {"ArXiv": "2001.00001"},
+                                "year": 2020,
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+        )
+
+    monkeypatch.setattr(
+        "research_agent.search.semantic_scholar.urllib.request.urlopen", fake_urlopen
+    )
+    hits = SemanticScholarSearcher(min_request_interval=0).get_citations(
+        "1706.03762", max_results=7
+    )
+    assert hits[0].arxiv_id == "2001.00001"
+    assert hits[0].source == "semantic_scholar"
+    # URL has /paper/ARXIV%3A1706.03762/citations
+    assert "/paper/ARXIV%3A1706.03762/citations" in captured["url"]
+    assert "limit=7" in captured["url"]
+
+
+def test_get_references_hits_correct_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_urlopen(req: urllib.request.Request, *_a: object, **_kw: object) -> object:
+        captured["url"] = req.full_url
+        return _fake_resp(
+            json.dumps(
+                {
+                    "data": [
+                        {
+                            "citedPaper": {
+                                "title": "Older work",
+                                "externalIds": {"ArXiv": "1409.0473"},
+                                "year": 2014,
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+        )
+
+    monkeypatch.setattr(
+        "research_agent.search.semantic_scholar.urllib.request.urlopen", fake_urlopen
+    )
+    hits = SemanticScholarSearcher(min_request_interval=0).get_references(
+        "1706.03762"
+    )
+    assert hits[0].arxiv_id == "1409.0473"
+    assert "/paper/ARXIV%3A1706.03762/references" in captured["url"]
+
+
+def test_get_citations_wraps_404_for_unknown_paper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "research_agent.search.semantic_scholar.urllib.request.urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(_http_error(404)),
+    )
+    monkeypatch.setattr(
+        "research_agent.search.semantic_scholar.time.sleep", lambda _s: None
+    )
+    with pytest.raises(ArxivSearchError) as exc_info:
+        SemanticScholarSearcher(min_request_interval=0, retries=0).get_citations(
+            "0000.00000"
+        )
+    assert "no record" in str(exc_info.value)
+
+
+def test_get_references_wraps_429_with_endpoint_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "research_agent.search.semantic_scholar.urllib.request.urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(_http_error(429)),
+    )
+    monkeypatch.setattr(
+        "research_agent.search.semantic_scholar.time.sleep", lambda _s: None
+    )
+    with pytest.raises(ArxivSearchError) as exc_info:
+        SemanticScholarSearcher(
+            min_request_interval=0, retries=1, rate_limit_backoff=0.0
+        ).get_references("1706.03762")
+    msg = str(exc_info.value)
+    assert "rate-limit" in msg.lower()
+    assert "/references" in msg

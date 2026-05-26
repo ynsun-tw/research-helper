@@ -42,6 +42,14 @@ You have access to function-calling tools that operate on the user's local state
   queue_next()                        - return the next pending arxiv_id from
                                         the queue without mutating state;
                                         chain into load_paper to read it
+  get_citations(arxiv_id, max_results?) - papers that cite the given paper
+                                        (forward references, via Semantic
+                                        Scholar). Use to find follow-up work
+                                        after the user loads a paper.
+  get_references(arxiv_id, max_results?) - papers cited by the given paper
+                                        (backward references). Use to trace
+                                        intellectual lineage / "what does
+                                        this build on?"
 
 Rules:
 - When the user refers back to an earlier search ("that transformer paper
@@ -57,9 +65,13 @@ Rules:
   read this later", call queue_add (do not load_paper). For "what's on my
   reading list?" call queue_list. For "read the next one" chain queue_next
   -> load_paper.
+- When the user wants to navigate the citation graph ("what cited this?",
+  "who built on this work?", "what does this paper rely on?"), call
+  get_citations or get_references on the anchor paper's arxiv_id and
+  surface a few high-signal hits; suggest /queue add for follow-ups.
 - The user can also invoke commands directly with slashes (/search, /history,
-  /recall, /read, /discuss, /queue, /paper, /idea, /ideas, /help, /exit) -
-  mention those when guidance is more useful than a tool call.
+  /recall, /read, /discuss, /queue, /cites, /refs, /paper, /idea, /ideas,
+  /help, /exit) - mention those when guidance is more useful than a tool call.
 - Be concise. Mirror the user's language.
 """
 

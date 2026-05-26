@@ -28,6 +28,7 @@ from research_agent.core.llm import LLMError
 from research_agent.core.loader import PaperLoadError
 from research_agent.core.paper_resolver import search_arxiv_papers
 from research_agent.search.arxiv_search import ArxivSearchError, ArxivSearchHit
+from research_agent.search.semantic_scholar import SemanticScholarSearcher
 from research_agent.storage.discussions import DiscussionMessage
 from research_agent.storage.reading_queue import ALLOWED_STATUSES, QueueEntry, QueueStatus
 from research_agent.storage.searches import StoredSearchQuery
@@ -178,13 +179,21 @@ def _render_search_hits(
     hits: list[ArxivSearchHit],
     *,
     already_read: set[str] | None = None,
+    title: str | None = None,
+    show_fallback_note: bool = True,
 ) -> None:
+    """Render hits as a Rich table.
+
+    ``title`` overrides the auto-derived table title (used by /cites and
+    /refs to label "Citations of …" / "References from …"). Callers that
+    intentionally hit Semantic Scholar (citation graph) pass
+    ``show_fallback_note=False`` so users don't see the misleading
+    "arXiv fallback" footer.
+    """
     already_read = already_read or set()
     show_score = any(h.relevance_score is not None for h in hits)
-    source_label = _source_label(hits)
-    table = Table(
-        title=f"{source_label} results for: {query}", show_header=True
-    )
+    table_title = title or f"{_source_label(hits)} results for: {query}"
+    table = Table(title=table_title, show_header=True)
     table.add_column("ID", style="cyan")
     table.add_column("Title")
     table.add_column("Year", justify="right")
@@ -218,7 +227,7 @@ def _render_search_hits(
     extras = []
     if show_score:
         extras.append("[dim]Sorted by relevance (LLM, 0-1).[/dim]")
-    if any(h.source != "arxiv" for h in hits):
+    if show_fallback_note and any(h.source != "arxiv" for h in hits):
         extras.append(
             "[dim yellow]Note:[/dim yellow] [dim]results came from "
             "Semantic Scholar (arXiv fallback).[/dim]"
@@ -408,6 +417,236 @@ def exec_recent_searches(session: ChatSession, args: dict[str, Any]) -> str:
         # Also render to the console so the user sees what the model is reading.
         _render_history(session, queries)
     return _history_summary_text(queries)
+
+
+# --------------------------------------------------------- citation graph
+
+
+def _resolve_citation_target(session: ChatSession, args: str) -> str | None:
+    """Return an arxiv_id from ``args``, else the anchor paper, else None.
+
+    Anchor papers carry an id like ``arxiv:1706.03762``; we strip the
+    ``arxiv:`` prefix. Local PDFs (``local:<sha1>``) have no arXiv
+    mapping so we can't query citations for them - return None there
+    too, and the caller asks the user for an explicit id.
+    """
+    explicit = args.strip()
+    if explicit:
+        return explicit
+    if session.anchor_paper is None:
+        return None
+    pid = session.anchor_paper.id
+    if pid.startswith("arxiv:"):
+        return pid[len("arxiv:"):]
+    return None
+
+
+def _citation_summary(
+    arxiv_id: str,
+    hits: list[ArxivSearchHit],
+    *,
+    relation: str,
+    already_read: set[str] | None = None,
+) -> str:
+    """Plain-text summary for the LLM tool result / working memory note."""
+    if not hits:
+        return f"No {relation} found for arxiv:{arxiv_id}."
+    read_set = already_read or set()
+    rows: list[str] = [
+        f"Found {len(hits)} {relation} for arxiv:{arxiv_id}:",
+    ]
+    for h in hits:
+        year = h.published[:4] if h.published else "—"
+        mark = " [read]" if h.arxiv_id in read_set else ""
+        rows.append(f"- {h.arxiv_id} ({year}) {h.title[:100]}{mark}")
+    return "\n".join(rows)
+
+
+def _run_citation_lookup(
+    session: ChatSession,
+    arxiv_id: str,
+    *,
+    relation: str,
+    max_results: int,
+) -> tuple[list[ArxivSearchHit], set[str]] | None:
+    """Shared S2 lookup; renders error to console and returns None on failure."""
+    s2 = SemanticScholarSearcher()
+    fetcher = s2.get_citations if relation == "citations" else s2.get_references
+    label = "citations of" if relation == "citations" else "references from"
+    try:
+        with session.console.status(
+            f"[bold]Fetching {label} arxiv:{arxiv_id}…[/bold]"
+        ):
+            hits = fetcher(arxiv_id, max_results=max_results)
+    except ArxivSearchError as exc:
+        session.console.print(f"[red]Error:[/red] {exc}")
+        return None
+    already_read = session.searches.already_read([h.arxiv_id for h in hits])
+    return hits, already_read
+
+
+def _render_citations(
+    session: ChatSession,
+    arxiv_id: str,
+    hits: list[ArxivSearchHit],
+    *,
+    relation: str,
+    already_read: set[str],
+) -> None:
+    label = "Citations of" if relation == "citations" else "References from"
+    if not hits:
+        session.console.print(
+            f"[yellow]No {relation} found for[/yellow] arxiv:{arxiv_id}."
+        )
+        return
+    _render_search_hits(
+        session,
+        arxiv_id,
+        hits,
+        already_read=already_read,
+        title=f"{label} arxiv:{arxiv_id} (via Semantic Scholar)",
+        show_fallback_note=False,
+    )
+    session.console.print(
+        "[dim]Add any to your queue with[/dim] /queue add <id>; "
+        "[dim]or load now with[/dim] /read <id>."
+    )
+
+
+@slash(
+    "cites",
+    summary="Show papers that cite the anchor paper (forward references, via S2).",
+    usage="/cites [arxiv-id]",
+)
+def cmd_cites(session: ChatSession, args: str) -> None:
+    target = _resolve_citation_target(session, args)
+    if target is None:
+        session.console.print(
+            "[yellow]Usage:[/yellow] /cites <arxiv-id>  "
+            "[dim](or /read a paper first to set the anchor)[/dim]"
+        )
+        return
+    result = _run_citation_lookup(session, target, relation="citations", max_results=10)
+    if result is None:
+        return
+    hits, already_read = result
+    _render_citations(
+        session, target, hits, relation="citations", already_read=already_read
+    )
+    session.memory.append(
+        "system",
+        _citation_summary(
+            target, hits, relation="citations", already_read=already_read
+        ),
+    )
+
+
+@slash(
+    "refs",
+    summary="Show papers cited by the anchor paper (backward references, via S2).",
+    usage="/refs [arxiv-id]",
+)
+def cmd_refs(session: ChatSession, args: str) -> None:
+    target = _resolve_citation_target(session, args)
+    if target is None:
+        session.console.print(
+            "[yellow]Usage:[/yellow] /refs <arxiv-id>  "
+            "[dim](or /read a paper first to set the anchor)[/dim]"
+        )
+        return
+    result = _run_citation_lookup(session, target, relation="references", max_results=10)
+    if result is None:
+        return
+    hits, already_read = result
+    _render_citations(
+        session, target, hits, relation="references", already_read=already_read
+    )
+    session.memory.append(
+        "system",
+        _citation_summary(
+            target, hits, relation="references", already_read=already_read
+        ),
+    )
+
+
+@register_llm_tool(
+    "get_citations",
+    _function_schema(
+        "get_citations",
+        "List papers that cite the given arXiv paper (forward references, "
+        "Semantic Scholar). Useful for finding follow-up work.",
+        {
+            "arxiv_id": {
+                "type": "string",
+                "description": "arXiv id of the paper whose citations you want.",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "How many citations to return (default 10, max 25).",
+                "minimum": 1,
+                "maximum": 25,
+            },
+        },
+        required=["arxiv_id"],
+    ),
+)
+def exec_get_citations(session: ChatSession, args: dict[str, Any]) -> str:
+    arxiv_id = str(args.get("arxiv_id", "")).strip()
+    if not arxiv_id:
+        return "Error: arxiv_id is required."
+    max_results = max(1, min(int(args.get("max_results", 10)), 25))
+    result = _run_citation_lookup(
+        session, arxiv_id, relation="citations", max_results=max_results
+    )
+    if result is None:
+        return f"Error: failed to fetch citations for {arxiv_id}."
+    hits, already_read = result
+    _render_citations(
+        session, arxiv_id, hits, relation="citations", already_read=already_read
+    )
+    return _citation_summary(
+        arxiv_id, hits, relation="citations", already_read=already_read
+    )
+
+
+@register_llm_tool(
+    "get_references",
+    _function_schema(
+        "get_references",
+        "List papers cited by the given arXiv paper (backward references, "
+        "Semantic Scholar). Useful for tracing intellectual lineage.",
+        {
+            "arxiv_id": {
+                "type": "string",
+                "description": "arXiv id of the paper whose bibliography you want.",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "How many references to return (default 10, max 25).",
+                "minimum": 1,
+                "maximum": 25,
+            },
+        },
+        required=["arxiv_id"],
+    ),
+)
+def exec_get_references(session: ChatSession, args: dict[str, Any]) -> str:
+    arxiv_id = str(args.get("arxiv_id", "")).strip()
+    if not arxiv_id:
+        return "Error: arxiv_id is required."
+    max_results = max(1, min(int(args.get("max_results", 10)), 25))
+    result = _run_citation_lookup(
+        session, arxiv_id, relation="references", max_results=max_results
+    )
+    if result is None:
+        return f"Error: failed to fetch references for {arxiv_id}."
+    hits, already_read = result
+    _render_citations(
+        session, arxiv_id, hits, relation="references", already_read=already_read
+    )
+    return _citation_summary(
+        arxiv_id, hits, relation="references", already_read=already_read
+    )
 
 
 # --------------------------------------------------------------- recall

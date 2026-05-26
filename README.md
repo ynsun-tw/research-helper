@@ -74,6 +74,8 @@ control or **plain text** to let the LLM pick the right tool.
 | `/queue next` | Preview the next pending entry without state change |
 | `/queue read` | Load + analyze the next pending entry, auto-mark done |
 | `/queue done\|skip\|remove <id>` | Manual state transitions |
+| `/cites [arxiv-id]` | Papers that cite the anchor (or given) paper — forward references via Semantic Scholar |
+| `/refs [arxiv-id]` | Papers cited by the anchor (or given) paper — backward references via Semantic Scholar |
 | `/paper` | Summary of the current anchor paper |
 | `/idea save [title]` | Persist the active debate as a saved idea |
 | `/ideas` | List saved ideas with their latest critic score |
@@ -89,12 +91,14 @@ backend. Available tools:
 
 `search_arxiv`, `recent_searches`, `recall_history`, `load_paper`,
 `discuss_idea`, `save_current_idea`, `list_ideas`, `queue_add`,
-`queue_list`, `queue_next`.
+`queue_list`, `queue_next`, `get_citations`, `get_references`.
 
 The model is instructed to chain them: `"open the BERT paper I searched
 last week"` → `recent_searches` → `load_paper`. `"read the next one on my
 list"` → `queue_next` → `load_paper`. `"what did we conclude about
 positional encodings?"` → `recall_history` then a synthesized recap.
+`"who built on this paper?"` → `get_citations` on the anchor paper.
+`"what does this paper rely on?"` → `get_references`.
 
 ## Quick start
 
