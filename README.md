@@ -40,6 +40,7 @@ Configuration is stored at `~/.research-agent/config.yaml` (file mode `600`).
 | `app_title` | `Research Agent` | Sent as `X-Title` header to OpenRouter |
 | `app_url` | `https://github.com/research-agent` | Sent as `HTTP-Referer` header |
 | `language` | `en` | Agent reply language: `en` or `zh` |
+| `alert_threshold` | `0.8` | Cosine similarity threshold for the parked-idea alert that fires on `/read` (range `[0.0, 1.0]`; lower = more reminders) |
 
 All local state lives under `~/.research-agent/`: `memory.db` (SQLite),
 `chroma/` (vector indexes for ideas + discussions), and `cache/`
@@ -82,7 +83,7 @@ control or **plain text** to let the LLM pick the right tool.
 | `/idea save [title]` | Persist the active debate as a saved idea |
 | `/ideas` | List saved ideas with their latest critic score |
 | `/idea show <id-prefix>` | Show one idea + its full score history |
-| `/idea update <id> status=<new>` | Change status (active / parked / shipped / dropped) |
+| `/ideas update <id> [--status <s>] [--feedback <note>] [--condition "<phrase>"] [--clear-conditions]` | Update status, log score feedback, or pin / clear activation conditions (multiple `--condition` flags allowed) |
 | `/help` | List every slash command |
 | `/exit` | Persist + flush vector indexes + quit |
 
@@ -120,6 +121,8 @@ list"` → `queue_next` → `load_paper`. `"what did we conclude about
 positional encodings?"` → `recall_history` then a synthesized recap.
 `"who built on this paper?"` → `get_citations` on the anchor paper.
 `"what does this paper rely on?"` → `get_references`.
+`"what should I search next?"` → `suggest_search_refinement` →
+`search_arxiv`. `"how am I doing this month?"` → `research_insights`.
 
 ## Quick start
 
@@ -131,18 +134,22 @@ research insights --output report.md         # write the report to a file
 ```
 
 ```text
-› /search efficient transformer long context
+› /search --mode applied efficient transformer long context
 › /queue add 1706.03762 Attention Is All You Need
 › /read 1706.03762
 › /discuss replace dense attention with top-k sparse attention for 32k contexts
 › /idea save sparse-routing-attention
+› /ideas update <id-prefix> --status shelved --condition "FlashAttention-3 release"
+› /refine                                    # ask Searcher for the next query
+› /insights --since 30d                      # weekly research review
 › /exit
 ```
 
 See [`examples/end-to-end-demo.md`](examples/end-to-end-demo.md) for a
 full scripted walkthrough that exercises every feature (search →
-relevance scoring → queue → read → two-phase debate → save idea →
-cross-session recall) on a real paper.
+relevance scoring → queue → read → citation graph → two-phase debate →
+parked-idea alerts → activation conditions → dynamic refinement →
+cross-session recall → research insights) on a real paper.
 
 ## Development
 

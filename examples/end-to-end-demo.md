@@ -1,6 +1,6 @@
 # End-to-End Demo: Transformer + Sparse Attention
 
-A 10-minute scripted walkthrough that exercises every M1 → M3 feature on a
+A 15-minute scripted walkthrough that exercises every M1 → M3 feature on a
 real paper. Use it to smoke-test the CLI after pulling, to demo the agent
 to someone, or as a starting point for your own session.
 
@@ -8,13 +8,19 @@ to someone, or as a starting point for your own session.
 
 | Capability | Slash | LLM tool | Step |
 |---|---|---|---|
-| arXiv search + LLM relevance scoring (M3 task 1) | `/search` | `search_arxiv` | §1, §6 |
+| arXiv search + LLM relevance scoring (M3 S3.1) | `/search` | `search_arxiv` | §1, §6 |
+| Search mode bias (M3 T3.1.3.3) | `/search --mode theoretical\|applied\|group:<author>` | `search_arxiv(mode=...)` | §1 |
 | Search history persistence (M3.1) | `/history` | `recent_searches` | §2, §6 |
-| Reading queue (M3 task 3) | `/queue add\|list\|next\|read\|done\|skip\|remove` | `queue_add`, `queue_list`, `queue_next` | §3 |
+| Reading queue (M3 S3.2.2) | `/queue add\|list\|next\|read\|done\|skip\|remove` | `queue_add`, `queue_list`, `queue_next` | §3 |
 | Paper load + Analyst + Critic (M1) | `/read` | `load_paper` | §4 |
+| Citation graph (M3 T3.1.2.2) | `/cites`, `/refs` | `get_citations`, `get_references` | §4.5 |
 | Two-phase debate (M2 + M2 fix) | `/discuss` | `discuss_idea` | §5 |
-| Save / inspect ideas (M2) | `/idea save`, `/ideas`, `/idea show` | `save_current_idea`, `list_ideas` | §5 |
-| Cross-session recall (M3 task 2) | `/recall` | `recall_history` | §7 |
+| Save / inspect ideas (M2) | `/idea save`, `/ideas`, `/ideas show` | `save_current_idea`, `list_ideas` | §5 |
+| Parked-idea alerts on `/read` (M3 T3.4.1) | implicit (banner after `/read`) | implicit | §5.4 |
+| Activation conditions on shelved ideas (M3 T3.4.2) | `/ideas update <id> --condition "<phrase>"` | — | §5.5 |
+| Cross-session recall (M3 S3.3.1) | `/recall` | `recall_history` | §7 |
+| Dynamic search refinement (M3 S3.2.3) | `/refine` | `suggest_search_refinement` | §8 |
+| Research insights / MetaMemory (M3 S3.3.2) | `/insights`, `research insights` | `research_insights` | §9 |
 | Auto-mark queued paper as `done` on `/read` | implicit | implicit | §3 verification |
 
 The flow uses **one** anchor paper — `arxiv:1706.03762` *Attention Is All
@@ -90,6 +96,26 @@ Verification checkpoints:
 - [ ] Scores are between 0.00 and 1.00.
 - [ ] At least one row has a non-empty `Why`.
 - [ ] Rows in descending score order.
+
+### 1.b Bias the search with `--mode`
+
+Same query, biased toward experimental work:
+
+```text
+/search --mode applied efficient transformer long context
+```
+
+You should see a faint `Biasing search toward applied papers.` hint
+before the table. The candidate set should skew toward benchmark /
+systems papers rather than theory. Two other modes exist:
+
+- `/search --mode theoretical <kw>` — analysis / proofs / convergence
+- `/search --mode "group:Andrej Karpathy" <kw>` — author bias (quote
+  multi-word names; `shlex` parses them)
+
+The LLM tool understands the same vocabulary: `"find me 5 applied
+papers on sparse attention"` should result in
+`search_arxiv(query="sparse attention", mode="applied", max_results=5)`.
 
 ---
 
@@ -185,6 +211,41 @@ The anchor paper is now set; `/paper` will summarise it on demand.
 
 ---
 
+## §4.5 Walk the citation graph
+
+The anchor paper is now eligible for **forward** (`/cites`) and
+**backward** (`/refs`) traversal via Semantic Scholar. Try both:
+
+```text
+/cites
+/refs
+```
+
+What to expect:
+
+- `/cites` → a Rich table titled `Papers that cite Attention Is All You
+  Need (forward references via Semantic Scholar)`. Hits include any
+  paper that mapped back to an arXiv id; non-arXiv journal/conference
+  citations are filtered out (with a hint).
+- `/refs` → backward references: the works *Attention Is All You Need*
+  itself builds on (encoder-decoder seq2seq, attention precursors,
+  byte-pair encoding, …).
+- Both tables flag papers already in your library with a `✓` in the
+  Read column.
+
+You can pass an explicit arXiv id too: `/cites 1810.04805` (papers
+citing BERT). The natural-language form picks the right tool:
+
+```text
+who built on this paper?            # -> get_citations
+what does this paper rely on?       # -> get_references
+```
+
+Tip: pair this with the queue — if you see a citation that looks
+promising, follow up with `/queue add <id> <title>` to read it later.
+
+---
+
 ## §5. Debate the idea (structured first turn → prose follow-ups)
 
 This is the M2 idea-workshop loop. The first turn returns the full
@@ -246,6 +307,81 @@ Then inspect:
 `/ideas` shows the saved idea with its latest critic score. `/idea show`
 prints title, description, status, current score, score history (every
 debate turn appends a snapshot), and any user feedback.
+
+### 5.4 Shelf the idea + watch the parked-idea alert on the next `/read`
+
+Park the idea so we can demo the proactive recall on the next paper:
+
+```text
+/ideas update <id-prefix> --status shelved
+```
+
+Now load a *topically related* paper (Longformer is queued from §3):
+
+```text
+/queue read
+```
+
+After the Analyst + Critic report renders you should see a one-line
+banner that looks roughly like:
+
+```
+Related ideas you parked previously
+- Top-k sparse self-attention with learned routing (shelved, similarity 84%) — /idea show <prefix>
+```
+
+Behaviour notes:
+
+- The banner only fires if the cosine similarity between the new
+  paper (title + abstract) and a shelved/waiting idea's stored
+  embedding is ≥ `alert_threshold` (default `0.80`).
+- Tune via `research config set alert_threshold 0.75` (more
+  reminders) or `0.9` (only near-duplicates).
+- It's purely a nudge — `/read` continues normally if no idea
+  matches. Failures are swallowed; a misbehaving vector store
+  never crashes a paper read.
+
+### 5.5 Pin activation conditions (literal-phrase alerts on `/search`)
+
+Some ideas are blocked on *concrete external events* — a dataset
+release, a checkpoint, a baseline result. Pin them as
+**activation conditions** on the shelved idea:
+
+```text
+/ideas update <id-prefix> --condition "FlashAttention-3 release" --condition "1B sparse attention checkpoint"
+```
+
+Multiple `--condition` flags can be chained in one command; phrases
+are greedily consumed until the next `--flag`, so quoting is
+optional. Clear with `--clear-conditions`. View what's pinned:
+
+```text
+/idea show <id-prefix>
+```
+
+The idea panel now shows an **Activation conditions** block.
+
+From here on, every `/search` (slash or LLM) does a literal,
+case-insensitive substring match of each condition against the
+title + abstract of every hit. When a paper looks like it would
+unblock the idea, the banner under the search table reads:
+
+```
+Shelved idea(s) may have an unblock:
+  - 2407.08608 "FlashAttention-3: Fast and Accurate Attention with Asynchrony" matches condition "FlashAttention-3 release" on Top-k sparse self-attention with learned routing — /idea show <prefix>
+```
+
+You can stress-test this by searching for the condition phrase
+directly:
+
+```text
+/search FlashAttention-3 asynchronous attention
+```
+
+The unblock banner should appear under the Searcher-scored table.
+Free-form phrases work great here: pick the literal vocabulary that
+will appear in the future paper's abstract if it actually delivers
+the thing.
 
 ---
 
@@ -312,7 +448,130 @@ Verification:
 
 ---
 
-## §8. Tear-down checklist
+## §8. Ask Searcher to refine the next query
+
+By now the session has the §5 debate transcript in working memory.
+The Searcher can read it and propose **the next thing to search**:
+
+```text
+/refine
+```
+
+What happens:
+
+1. Orchestrator hands a compact transcript snippet (last ~12 messages,
+   role-prefixed, char-capped) to the Searcher agent.
+2. Searcher returns a `SearchSuggestion(query, mode?, reason,
+   confidence)`. The banner renders:
+
+   ```
+   Suggested next search: top-k sparse attention KV cache (mode: applied)
+   Reason: Critic flagged memory bandwidth as the bottleneck.
+                                                        (confidence 78%)
+   ```
+
+3. You get a one-line prompt: `Run this search? [y]es / [e]dit /
+   [s]kip >`.
+   - `y` (or just Enter on accept-default builds) → dispatches
+     `cmd_search` immediately with `--mode applied` prepended.
+   - `e` → second prompt: edit the query in-place, mode is
+     preserved. Empty edit aborts.
+   - `s` (or `n`) → noop.
+
+The LLM tool form (`"what should I search next?"`) returns the same
+suggestion as a single line so the model can chain into
+`search_arxiv`. The Searcher anchors its proposal on the **previous**
+query (stored in `ChatSession.last_search_query`), so it won't just
+repeat what you already searched.
+
+When to use: any time the conversation reveals a new angle (the
+Critic raised a missing baseline, the user pivoted to a sub-problem).
+Skip when the transcript is too thin — Searcher will return an empty
+query and you'll see a `Searcher returned no refined query` hint
+instead of garbage.
+
+---
+
+## §9. Research insights — your local activity dashboard
+
+Time for the weekly review. The `/insights` slash (and the
+`research insights` Typer subcommand, runnable outside the REPL)
+roll up everything in your local SQLite into a Markdown report.
+**No LLM call** — pure aggregation, instant, reproducible.
+
+```text
+/insights
+```
+
+You'll see a Markdown document with three sections:
+
+```
+# Research Insights — all-time
+_Generated 2026-05-26 04:13:21 UTC_
+
+## Papers
+- Total: 3
+- By year:
+  - 2024: 2
+  - 2023: 1
+- Top tags:
+  - nlp (2)
+  - transformers (1)
+- Top venues:
+  - ICML (2)
+  - NeurIPS (1)
+- Top authors:
+  - Vaswani (1)
+  - ...
+
+## Ideas
+- Total: 1
+- By status:
+  - shelved: 1
+- Average critic score: 6.00/9
+- Most-debated ideas (by score history length):
+  - `<prefix>` Top-k sparse self-attention with learned routing — 1 round(s)
+- Highest-scoring ideas:
+  - `<prefix>` Top-k sparse self-attention with learned routing — 6/9
+
+## Discussions
+- Sessions: 2
+- Messages: 12
+- By role:
+  - user: 4
+  - analyst: 3
+  - critic: 3
+  - system: 2
+- Most recent sessions:
+  - `<prefix>` — 2026-05-26 04:11:42
+```
+
+Constrain to a window with `--since`:
+
+```text
+/insights --since 7d
+/insights --since 6m
+/insights --since=30d
+/insights --since all
+```
+
+`d` / `w` / `m` / `y` units are accepted; plain integers are days.
+
+The same report is available outside the REPL — handy for
+committing a snapshot to git or piping into a script:
+
+```bash
+research insights --since 30d                          # print to stdout
+research insights --since 7d --output reports/this-week.md  # write to disk
+```
+
+Use it for: weekly research review, "am I reading too narrowly?"
+self-check, finding the idea you've debated the most but never
+saved.
+
+---
+
+## §10. Tear-down checklist
 
 ```text
 /queue list all       # 1706.03762=done, others=pending
@@ -357,3 +616,14 @@ You should see:
 - **Mock mode**: setting `RESEARCH_AGENT_TEST_MODE=1` forces the
   keyword fallback for chroma; useful if you don't want a real
   vector index on disk.
+- **Tune the parked-idea alert**: `research config set
+  alert_threshold 0.7` to surface more reminders (looser
+  similarity), or `0.9` for only near-duplicates. The threshold is
+  shown in `research config show`.
+- **Demo `/refine` on a thinner transcript**: start a fresh REPL,
+  run only `/search` + `/read` (no `/discuss`), then `/refine` — you
+  should see the "Searcher returned no refined query" path, since
+  there's no debate signal to mine.
+- **Commit a weekly report**: `research insights --since 7d --output
+  reports/$(date +%F).md` makes the dashboard a git-friendly
+  artefact.
