@@ -105,6 +105,24 @@ CREATE TABLE IF NOT EXISTS reading_queue (
 );
 CREATE INDEX IF NOT EXISTS idx_reading_queue_status
     ON reading_queue(status, added_at);
+
+-- M4 S4.1.1: paragraph-level prose samples extracted from the user's own
+-- papers (or any papers they want Scribe to mimic). Each row is one
+-- filtered paragraph; multiple rows per source paper. Foreign-key to
+-- ``papers.id`` is intentionally not enforced - style training works
+-- equally well on papers the user never /read'd inside the REPL.
+CREATE TABLE IF NOT EXISTS style_samples (
+    id            TEXT PRIMARY KEY,
+    paper_id      TEXT NOT NULL,
+    section_title TEXT NOT NULL DEFAULT '',
+    paragraph     TEXT NOT NULL,
+    char_count    INTEGER NOT NULL DEFAULT 0,
+    word_count    INTEGER NOT NULL DEFAULT 0,
+    sentence_count INTEGER NOT NULL DEFAULT 0,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_style_samples_paper
+    ON style_samples(paper_id);
 """
 
 

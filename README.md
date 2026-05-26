@@ -190,6 +190,31 @@ relevance scoring → queue → read → citation graph → two-phase debate →
 parked-idea alerts → activation conditions → dynamic refinement →
 cross-session recall → research insights) on a real paper.
 
+## Writing assistant (M4, in progress)
+
+Train the upcoming Scribe agent on your own published papers so it
+writes in a voice that actually sounds like yours. Today the M4
+surface covers **sample import** (S4.1.1); fingerprint analysis +
+draft generation + writing-review pipeline land in subsequent stories.
+
+```bash
+# Pull paragraphs from a folder of PDFs
+research style train --dir ~/papers
+
+# Or hand-pick sources (arXiv ids and local PDFs may be mixed)
+research style train arxiv:2301.07041 ~/papers/my-thesis.pdf
+
+# Inspect the corpus
+research style show
+```
+
+`style train` parses each source, splits it into paragraphs, drops
+non-prose (references, acknowledgements, formula-dense methodology,
+single-sentence captions), and writes the survivors into the
+`style_samples` table under `~/.research-agent/memory.db`. Re-running
+the same source replaces its prior samples by default; pass
+`--append` to accumulate instead.
+
 ## Development
 
 ```bash

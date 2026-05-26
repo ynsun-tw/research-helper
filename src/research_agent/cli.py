@@ -18,6 +18,7 @@ from rich.table import Table
 
 from research_agent.agents.meta_memory import MetaMemory
 from research_agent.chat import run_chat
+from research_agent.cli_style import run_style_show, run_style_train
 from research_agent.config import Config, ConfigError
 from research_agent.core.language import language_label
 from research_agent.core.llm import LLMClient
@@ -34,6 +35,10 @@ app = typer.Typer(
 )
 config_app = typer.Typer(help="Manage configuration (API keys, model, paths).")
 app.add_typer(config_app, name="config")
+style_app = typer.Typer(
+    help="Train Scribe on your writing style (import samples, build fingerprints)."
+)
+app.add_typer(style_app, name="style")
 
 console = Console()
 
@@ -173,6 +178,65 @@ def insights(
     from rich.markdown import Markdown
 
     console.print(Markdown(markdown))
+
+
+@style_app.command("train")
+def style_train(
+    sources: list[str] = typer.Argument(
+        None,
+        help=(
+            "Sources to learn from. Each item is either 'arxiv:<id>' "
+            "(or a bare arXiv id) or a path to a local PDF. Combine "
+            "with --dir to also pull every PDF from a folder."
+        ),
+    ),
+    directory: str = typer.Option(
+        "",
+        "--dir",
+        help="Optional folder to scan for .pdf files (non-recursive).",
+    ),
+    append: bool = typer.Option(
+        False,
+        "--append",
+        help=(
+            "Keep prior samples for any paper re-imported in this run. "
+            "By default each source's old samples are replaced."
+        ),
+    ),
+) -> None:
+    """Import prose paragraphs from your own papers for style training.
+
+    Examples::
+
+        research style train arxiv:2301.07041 arxiv:2305.14314
+        research style train --dir ~/papers
+        research style train ~/papers/my-thesis.pdf
+    """
+    cfg = _load_config()
+    src_list = [s for s in (sources or []) if s and s.strip()]
+    dir_path = None
+    if directory.strip():
+        from pathlib import Path
+
+        dir_path = Path(directory).expanduser()
+
+    result = run_style_train(
+        cfg,
+        console,
+        sources=src_list,
+        directory=dir_path,
+        replace=not append,
+    )
+    if result.sources_failed and not result.sources_processed:
+        raise typer.Exit(code=1)
+
+
+@style_app.command("show")
+def style_show() -> None:
+    """Print a summary of the current style training corpus."""
+    cfg = _load_config()
+    code = run_style_show(cfg, console)
+    raise typer.Exit(code=code)
 
 
 def main() -> None:

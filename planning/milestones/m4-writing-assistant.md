@@ -1,4 +1,4 @@
-> Status: PENDING
+> Status: IN PROGRESS
 > Index: [../../PLAN.md](../../PLAN.md)
 
 # M4 — 论文写作助手
@@ -19,7 +19,7 @@
 
 > 价值假设：精准的风格指纹是 Scribe 产出"读起来像用户写的"内容的关键
 
-### Story S4.1.1 — 论文样本导入与解析
+### Story S4.1.1 — 论文样本导入与解析 [x] COMPLETED
 
 **验收条件**:
 - `research style train --dir ~/papers/` 批量处理目录下所有 PDF
@@ -28,10 +28,16 @@
 - 过滤非用户撰写内容（参考文献、公式密集段）
 
 **Tasks**:
-- [ ] T4.1.1.1 实现 `style train` CLI 命令（支持目录和 arXiv ID）
-- [ ] T4.1.1.2 实现样本预处理：提取可用于风格分析的文本段落
-- [ ] T4.1.1.3 实现内容过滤：识别并排除参考文献段、公式密集段
-- [ ] T4.1.1.4 将样本存入 `style_samples` 表，关联来源论文
+- [x] T4.1.1.1 实现 `style train` CLI 命令（支持目录和 arXiv ID）—
+  `research style train [sources...] [--dir <path>] [--append]`，加上
+  `research style show` 查看现有语料。
+- [x] T4.1.1.2 实现样本预处理：提取可用于风格分析的文本段落 —
+  `style/extractor.py` 处理 PyMuPDF 软换行 / 连字符换行，按空行切段。
+- [x] T4.1.1.3 实现内容过滤：识别并排除参考文献段、公式密集段 —
+  `style/filters.py` 黑名单 section + 数学密度 + 字母密度 + 长度/句数。
+- [x] T4.1.1.4 将样本存入 `style_samples` 表，关联来源论文 —
+  新增 SQLite schema + `StyleSampleRepository`（bulk_add / 按 paper 计数 /
+  按 paper 替换）。单元测试覆盖过滤、抽取、CRUD、CLI dispatch。
 
 ### Story S4.1.2 — 风格指纹分析
 
