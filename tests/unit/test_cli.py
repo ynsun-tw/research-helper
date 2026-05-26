@@ -30,6 +30,49 @@ def test_help_only_keeps_config_subcommand() -> None:
     assert " ideas " not in result.stdout
 
 
+def test_insights_subcommand_runs(
+    config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`research insights` should run against an empty DB and emit Markdown."""
+    monkeypatch.setattr(
+        "research_agent.cli._load_config",
+        lambda: Config.load(config_dir),
+    )
+    result = runner.invoke(app, ["insights"])
+    assert result.exit_code == 0, result.stdout
+    assert "Research Insights" in result.stdout
+    assert "Papers" in result.stdout
+
+
+def test_insights_writes_output_file(
+    config_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "research_agent.cli._load_config",
+        lambda: Config.load(config_dir),
+    )
+    out_file = tmp_path / "report.md"
+    result = runner.invoke(
+        app, ["insights", "--since", "30d", "--output", str(out_file)]
+    )
+    assert result.exit_code == 0, result.stdout
+    assert out_file.exists()
+    content = out_file.read_text(encoding="utf-8")
+    assert "Research Insights" in content
+    assert "last 30 days" in content
+
+
+def test_insights_rejects_bad_since(
+    config_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "research_agent.cli._load_config",
+        lambda: Config.load(config_dir),
+    )
+    result = runner.invoke(app, ["insights", "--since", "yesterday"])
+    assert result.exit_code == 1
+
+
 def test_config_show_empty(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "research_agent.cli._load_config",

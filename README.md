@@ -77,6 +77,7 @@ control or **plain text** to let the LLM pick the right tool.
 | `/cites [arxiv-id]` | Papers that cite the anchor (or given) paper — forward references via Semantic Scholar |
 | `/refs [arxiv-id]` | Papers cited by the anchor (or given) paper — backward references via Semantic Scholar |
 | `/refine` | Ask Searcher to propose the **next** search query from your recent discussion (query + optional `--mode` + reason + confidence); interactively accept / edit / skip |
+| `/insights [--since 30d\|7d\|6m\|all]` | Deterministic Markdown summary of your local activity: papers (by year, top tags / authors / venues), ideas (by status, average critic score, most-debated, top-scored) and discussion volume. No LLM call - safe to run anywhere |
 | `/paper` | Summary of the current anchor paper |
 | `/idea save [title]` | Persist the active debate as a saved idea |
 | `/ideas` | List saved ideas with their latest critic score |
@@ -110,7 +111,8 @@ backend. Available tools:
 
 `search_arxiv`, `recent_searches`, `recall_history`, `load_paper`,
 `discuss_idea`, `save_current_idea`, `list_ideas`, `queue_add`,
-`queue_list`, `queue_next`, `get_citations`, `get_references`.
+`queue_list`, `queue_next`, `get_citations`, `get_references`,
+`suggest_search_refinement`, `research_insights`.
 
 The model is instructed to chain them: `"open the BERT paper I searched
 last week"` → `recent_searches` → `load_paper`. `"read the next one on my
@@ -123,7 +125,9 @@ positional encodings?"` → `recall_history` then a synthesized recap.
 
 ```bash
 research config set api_key sk-or-...
-research
+research                                     # enter the conversational REPL
+research insights --since 30d                # Markdown summary of recent activity
+research insights --output report.md         # write the report to a file
 ```
 
 ```text

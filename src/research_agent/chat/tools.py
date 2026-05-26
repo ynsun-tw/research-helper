@@ -21,6 +21,7 @@ from rich.table import Table
 from research_agent.agents.analyst import AnalysisResult
 from research_agent.agents.critic import CritiqueResult
 from research_agent.agents.debate import DebateHistory, DebateResult, FollowUpResult
+from research_agent.agents.meta_memory import MetaMemory
 from research_agent.agents.searcher import SearchSuggestion
 from research_agent.chat.session import ChatSession
 from research_agent.cli_ideas import run_ideas_list, run_ideas_show, run_ideas_update
@@ -628,6 +629,109 @@ def exec_suggest_search_refinement(
         f"confidence={suggestion.confidence:.2f}, reason={suggestion.reason!r}. "
         "Call search_arxiv with this query (and mode if set) to run it."
     )
+
+
+# --------------------------------------------------------- insights
+
+
+def _parse_since_days(raw: str) -> int | None:
+    """Parse ``--since 30d|7d|6m|1y|all`` to a day count (or None for all)."""
+    s = raw.strip().lower()
+    if not s or s in ("all", "alltime", "all-time"):
+        return None
+    unit_map = {"d": 1, "w": 7, "m": 30, "y": 365}
+    if s[-1] in unit_map and s[:-1].isdigit():
+        return int(s[:-1]) * unit_map[s[-1]]
+    if s.isdigit():
+        return int(s)
+    raise ValueError(f"Unrecognised --since value: {raw!r}")
+
+
+def _build_insights(session: ChatSession, since_days: int | None) -> str:
+    """Run MetaMemory and return its Markdown report."""
+    meta = MetaMemory(session.db)
+    report = meta.compute(since_days=since_days)
+    return report.to_markdown()
+
+
+@slash(
+    "insights",
+    summary="Markdown research summary: papers, ideas, discussion activity.",
+    usage="/insights [--since 30d|7d|6m|all]",
+)
+def cmd_insights(session: ChatSession, args: str) -> None:
+    since_days: int | None = None
+    tokens = args.split()
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "--since" and i + 1 < len(tokens):
+            try:
+                since_days = _parse_since_days(tokens[i + 1])
+            except ValueError as exc:
+                session.console.print(f"[red]Error:[/red] {exc}")
+                return
+            i += 2
+            continue
+        if tok.startswith("--since="):
+            try:
+                since_days = _parse_since_days(tok[len("--since="):])
+            except ValueError as exc:
+                session.console.print(f"[red]Error:[/red] {exc}")
+                return
+            i += 1
+            continue
+        session.console.print(
+            f"[yellow]Unknown flag:[/yellow] {tok}. "
+            "Usage: /insights [--since 30d|7d|6m|all]"
+        )
+        return
+    markdown = _build_insights(session, since_days)
+    # Render Markdown for the user; the LLM (via system memory) gets the
+    # raw text below so it can answer follow-up questions about the report.
+    try:
+        from rich.markdown import Markdown
+        session.console.print(Markdown(markdown))
+    except ImportError:
+        session.console.print(markdown)
+    session.memory.append("system", f"Insights report (period={since_days}):\n{markdown}")
+
+
+@register_llm_tool(
+    "research_insights",
+    _function_schema(
+        "research_insights",
+        "Compute a research-activity summary (papers, ideas, discussion "
+        "stats) from local storage and return it as Markdown. Use when the "
+        "user asks 'how am I doing', 'what have I been reading', or 'show "
+        "me my recent activity'. Optional `since_days` filters to recent "
+        "activity (e.g. 30 for last month).",
+        {
+            "since_days": {
+                "type": "integer",
+                "description": "Optional day window. Omit for all-time.",
+                "minimum": 1,
+                "maximum": 3650,
+            },
+        },
+    ),
+)
+def exec_research_insights(session: ChatSession, args: dict[str, Any]) -> str:
+    since_raw = args.get("since_days")
+    since_days: int | None = None
+    if since_raw is not None:
+        try:
+            since_days = max(1, min(int(since_raw), 3650))
+        except (TypeError, ValueError):
+            return "Error: since_days must be an integer (days)."
+    markdown = _build_insights(session, since_days)
+    # Render to the console too so the user sees what the model is reading.
+    try:
+        from rich.markdown import Markdown
+        session.console.print(Markdown(markdown))
+    except ImportError:
+        session.console.print(markdown)
+    return markdown
 
 
 # --------------------------------------------------------- citation graph

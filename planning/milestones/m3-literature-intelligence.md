@@ -141,10 +141,10 @@
 - `research insights` 输出每月研究回顾报告
 
 **Tasks**:
-- [ ] T3.3.2.1 实现 `MetaMemory`：基于 SQLite 聚合分析
-- [ ] T3.3.2.2 实现研究兴趣追踪（论文标签频率统计、时间维度分析）
-- [ ] T3.3.2.3 实现决策模式识别（Idea 状态转换统计）
-- [ ] T3.3.2.4 实现 `research insights` 命令，输出 Markdown 报告
+- [x] T3.3.2.1 `agents/meta_memory.py::MetaMemory(db).compute(since_days?) → InsightsReport`：纯 SQL 聚合 (no LLM)，遍历 `papers` / `ideas` / `discussions` 三张表，吐出一个 dataclass，含 paper_count / papers_by_year / top_tags / top_authors / top_venues / idea_count / ideas_by_status / avg_critic_score / most_engaged_ideas / top_scored_ideas / session_count / message_count / role_counts / recent_session_ids。`since_days` 把窗口收敛到 `WHERE created_at >= ?`（all-time / last N days 两种 period 标签）。`_parse_json_list` 对 NULL / 非 JSON / 非 list 列容错为 `[]`，老库不会炸。
+- [x] T3.3.2.2 研究兴趣追踪：`_fill_papers` 用 Counter 累加 tags / authors / venues / 年份，Counter.most_common(top_n=5) 切片。`papers_by_year` 按年份倒序，方便看到"今年读了多少篇"。时间维度通过 `since_days` 实现（30d/7d/6m/1y/all），CLI 都支持。
+- [x] T3.3.2.3 决策模式：`_fill_ideas` 用 status Counter 直接得到现状分布；`avg_critic_score` 只对有 `critic_score` 的 idea 求均值（None 排除）；`most_engaged_ideas` 按 `len(score_history)` 倒序（>0 才进榜），代表用户最反复辩论的；`top_scored_ideas` 按 critic_score 倒序。完整状态变迁 audit log 暂不存（需要后续 schema 工作），现状已覆盖"哪些想法被升迁到 experimenting / completed、哪些被 abandoned"这一基础视图。
+- [x] T3.3.2.4 `research insights [--since 7d|30d|6m|1y|all] [--output report.md]` Typer 子命令 + `/insights` slash + `research_insights` LLM 工具，都共用 `InsightsReport.to_markdown()` 渲染。Markdown 报告分四块 (Header / Papers / Ideas / Discussions)，结构稳定可直接 commit 进 repo。`/insights` 同步把 markdown 写进 working memory，让 LLM 后续能回答"上周读得最多的 venue 是？"。Rich Markdown 渲染走 console。13 个 chat-slash 单测 + 3 个 typer CLI 单测 + 9 个 MetaMemory 行为单测，覆盖 empty DB / paper rollup / idea rollup / no-score 边界 / discussion rollup / since_days 过滤 / 模板存在性 / 坏 JSON 容错。
 
 ---
 

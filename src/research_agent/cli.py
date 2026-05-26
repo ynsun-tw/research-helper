@@ -16,10 +16,12 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from research_agent.agents.meta_memory import MetaMemory
 from research_agent.chat import run_chat
 from research_agent.config import Config, ConfigError
 from research_agent.core.language import language_label
 from research_agent.core.llm import LLMClient
+from research_agent.storage.database import Database
 
 app = typer.Typer(
     name="research",
@@ -113,6 +115,64 @@ def config_show() -> None:
     table.add_row("alert_threshold", f"{cfg.alert_threshold:.2f}")
     table.add_row("config_path", str(cfg.config_path))
     console.print(table)
+
+
+@app.command("insights")
+def insights(
+    since: str = typer.Option(
+        "",
+        "--since",
+        help=(
+            "Limit to recent activity. Accepts: 7d, 30d, 6m, 1y, all (default)."
+        ),
+    ),
+    output: str = typer.Option(
+        "",
+        "--output",
+        "-o",
+        help="Optional path to write the Markdown report. Prints to stdout otherwise.",
+    ),
+) -> None:
+    """Generate a research-activity Markdown summary from local storage.
+
+    Rolls up papers (top tags, authors, venues), ideas (by status,
+    most-debated, top-scored), and discussion activity. The report is
+    deterministic - no LLM call - so it's safe to run anywhere.
+    """
+    cfg = _load_config()
+    since_days: int | None = None
+    if since.strip():
+        s = since.strip().lower()
+        unit_map = {"d": 1, "w": 7, "m": 30, "y": 365}
+        try:
+            if s in ("all", "alltime", "all-time"):
+                since_days = None
+            elif s[-1] in unit_map and s[:-1].isdigit():
+                since_days = int(s[:-1]) * unit_map[s[-1]]
+            elif s.isdigit():
+                since_days = int(s)
+            else:
+                raise ValueError(f"Unrecognised --since value: {since!r}")
+        except ValueError as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+
+    db = Database(cfg.db_path)
+    try:
+        report = MetaMemory(db).compute(since_days=since_days)
+    finally:
+        db.close()
+    markdown = report.to_markdown()
+    if output.strip():
+        from pathlib import Path
+
+        out_path = Path(output).expanduser()
+        out_path.write_text(markdown, encoding="utf-8")
+        console.print(f"[green]✓[/green] Wrote insights to [bold]{out_path}[/bold]")
+        return
+    from rich.markdown import Markdown
+
+    console.print(Markdown(markdown))
 
 
 def main() -> None:
