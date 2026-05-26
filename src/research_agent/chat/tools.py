@@ -181,7 +181,10 @@ def _render_search_hits(
 ) -> None:
     already_read = already_read or set()
     show_score = any(h.relevance_score is not None for h in hits)
-    table = Table(title=f"arXiv results for: {query}", show_header=True)
+    source_label = _source_label(hits)
+    table = Table(
+        title=f"{source_label} results for: {query}", show_header=True
+    )
     table.add_column("ID", style="cyan")
     table.add_column("Title")
     table.add_column("Year", justify="right")
@@ -215,11 +218,26 @@ def _render_search_hits(
     extras = []
     if show_score:
         extras.append("[dim]Sorted by relevance (LLM, 0-1).[/dim]")
+    if any(h.source != "arxiv" for h in hits):
+        extras.append(
+            "[dim yellow]Note:[/dim yellow] [dim]results came from "
+            "Semantic Scholar (arXiv fallback).[/dim]"
+        )
     extras.append(
         "[dim]Use[/dim] /read <id> [dim]to load;[/dim] "
         "[green]✓[/green] [dim]= already in your library.[/dim]"
     )
     session.console.print(" ".join(extras))
+
+
+def _source_label(hits: list[ArxivSearchHit]) -> str:
+    """Pretty label for the table title; honours fallback sources."""
+    if not hits:
+        return "arXiv"
+    src = hits[0].source
+    if src == "semantic_scholar":
+        return "Semantic Scholar (arXiv fallback)"
+    return "arXiv"
 
 
 def _search_summary(

@@ -48,7 +48,7 @@
 - 与 arXiv 结果合并去重
 
 **Tasks**:
-- [ ] T3.1.2.1 实现 `SemanticScholarSearcher`（使用官方 API，带速率限制处理）
+- [x] T3.1.2.1 实现 `SemanticScholarSearcher`（Graph API `/paper/search`，复用 `ArxivSearchHit` 类型，hits 标 `source="semantic_scholar"`；带 3s 客户端节流 + 礼貌 User-Agent + 429/timeout 重试 + 可选 `x-api-key`）。`paper_resolver.search_arxiv_papers` 自动 arXiv 主源 → S2 fallback，UI 在 fallback 时给出黄色提示；`/read` 仍能用 S2 暴露的 `externalIds.ArXiv` 加载。测试见 `tests/unit/test_semantic_scholar.py` + `tests/unit/test_paper_resolver.py` 的 fallback 用例。
 - [ ] T3.1.2.2 实现引用图查询：`get_citations(paper_id)` / `get_references(paper_id)`
 - [ ] T3.1.2.3 实现跨源去重：基于标题相似度合并结果
 - [ ] T3.1.2.4 集成测试：搜索已知论文，验证引用图数据完整性

@@ -12,6 +12,7 @@ from research_agent.core.loader import PaperLoadError, load_paper
 from research_agent.core.paper import Paper
 from research_agent.search.arxiv import normalize_arxiv_id
 from research_agent.search.arxiv_search import ArxivSearcher, ArxivSearchError, ArxivSearchHit
+from research_agent.search.semantic_scholar import SemanticScholarSearcher
 
 
 def try_direct_paper_load(query: str, *, cache_dir: Path) -> Paper | None:
@@ -33,22 +34,61 @@ def search_arxiv_papers(
     query: str,
     *,
     searcher: ArxivSearcher | None = None,
+    fallback_searcher: SemanticScholarSearcher | None = None,
     max_results: int = 5,
+    use_fallback: bool = True,
 ) -> list[ArxivSearchHit]:
-    """Search arXiv by title/keywords."""
+    """Search by title/keywords with arXiv primary, Semantic Scholar fallback.
+
+    arXiv is queried first; on any :class:`ArxivSearchError` (most
+    commonly an HTTP 429 from arXiv's CDN) we transparently retry the
+    same query against Semantic Scholar, which exposes the arXiv
+    mapping in ``externalIds.ArXiv``. Both sources return
+    :class:`ArxivSearchHit` instances tagged with ``source`` so the
+    UI can flag fallbacks.
+
+    Behaviour:
+    - arXiv returns >= 1 hit  -> use those.
+    - arXiv returns 0 hits     -> try Semantic Scholar (fallback).
+    - arXiv raises             -> try Semantic Scholar (fallback).
+    - Both raise / empty       -> raise PaperLoadError mentioning both.
+    """
     stripped = query.strip()
     if not stripped:
         raise PaperLoadError(
             "Paper query is empty. Use --paper with an arXiv id, title, or PDF path."
         )
-    search = searcher or ArxivSearcher()
+    primary = searcher or ArxivSearcher()
+
+    primary_err: ArxivSearchError | None = None
     try:
-        hits = search.search(stripped, max_results=max_results)
+        hits = primary.search(stripped, max_results=max_results)
+        if hits:
+            return hits
     except ArxivSearchError as exc:
-        raise PaperLoadError(str(exc)) from exc
-    if not hits:
+        primary_err = exc
+
+    if not use_fallback:
+        if primary_err is not None:
+            raise PaperLoadError(str(primary_err)) from primary_err
         raise PaperLoadError(f"No arXiv papers found for: {stripped!r}")
-    return hits
+
+    fallback = fallback_searcher or SemanticScholarSearcher()
+    try:
+        fallback_hits = fallback.search(stripped, max_results=max_results)
+    except ArxivSearchError as fb_exc:
+        msg = f"Semantic Scholar fallback also failed: {fb_exc}"
+        if primary_err is not None:
+            msg = f"arXiv failed ({primary_err}). {msg}"
+        raise PaperLoadError(msg) from fb_exc
+
+    if fallback_hits:
+        return fallback_hits
+    if primary_err is not None:
+        raise PaperLoadError(
+            f"arXiv failed ({primary_err}); Semantic Scholar returned no hits."
+        ) from primary_err
+    raise PaperLoadError(f"No papers found for: {stripped!r} (tried arXiv + S2)")
 
 
 def load_paper_from_hit(hit: ArxivSearchHit, *, cache_dir: Path) -> Paper:

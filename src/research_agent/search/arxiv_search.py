@@ -31,12 +31,22 @@ class ArxivSearchError(Exception):
 
 @dataclass(slots=True)
 class ArxivSearchHit:
+    """A single paper hit. ``source`` records which engine produced it
+    (``arxiv`` or ``semantic_scholar``) so the UI can flag fallbacks.
+
+    The historical name ``ArxivSearchHit`` is kept for backwards
+    compatibility; non-arXiv sources still emit instances of this class
+    but only ever populate ``arxiv_id`` for papers that have an arXiv
+    mapping (so downstream ``/read`` still works).
+    """
+
     arxiv_id: str
     title: str
     abstract: str
     published: str = ""
     relevance_score: float | None = None
     relevance_reason: str = ""
+    source: str = "arxiv"
 
 
 class ArxivSearcher:
