@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -83,17 +84,29 @@ class WorkingMemory:
         lines.reverse()
         return "\n".join(lines)
 
-    def persist(self, repo: DiscussionRepository) -> int:
-        """Write any in-memory messages not yet stored in SQLite."""
+    def persist(
+        self,
+        repo: DiscussionRepository,
+        *,
+        indexer: Callable[[str, MemoryMessage], None] | None = None,
+    ) -> int:
+        """Write any in-memory messages not yet stored in SQLite.
+
+        ``indexer`` (if given) is called with ``(message_id, message)`` for
+        every newly persisted row, letting callers (e.g. MemoryKeeper) push
+        the same content into a vector store in lock-step with SQLite.
+        """
         written = 0
         for msg in self.messages[self._persisted_count :]:
-            repo.append(
+            mid = repo.append(
                 self.session_id,
                 msg.role,
                 msg.content,
                 metadata=msg.metadata or None,
                 idea_id=self.idea_id,
             )
+            if indexer is not None:
+                indexer(mid, msg)
             written += 1
         self._persisted_count = len(self.messages)
         return written

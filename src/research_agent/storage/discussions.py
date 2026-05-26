@@ -62,6 +62,21 @@ class DiscussionRepository:
         ).fetchall()
         return [_row_to_message(r) for r in rows]
 
+    def get_many(self, message_ids: list[str]) -> dict[str, DiscussionMessage]:
+        """Fetch a set of messages by id, returning a dict keyed by id.
+
+        Used by MemoryKeeper.recall_history to hydrate vector-store hits.
+        Missing ids are simply absent from the dict.
+        """
+        if not message_ids:
+            return {}
+        placeholders = ",".join("?" for _ in message_ids)
+        rows = self.db.conn.execute(
+            f"SELECT * FROM discussions WHERE id IN ({placeholders})",
+            message_ids,
+        ).fetchall()
+        return {r["id"]: _row_to_message(r) for r in rows}
+
 
 def _row_to_message(row: sqlite3.Row) -> DiscussionMessage:
     meta_raw = row["metadata"]

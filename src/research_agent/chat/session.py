@@ -22,6 +22,7 @@ from research_agent.core.llm import LLMProvider
 from research_agent.core.paper import Paper
 from research_agent.memory.working_memory import WorkingMemory
 from research_agent.storage.database import Database, PaperRepository
+from research_agent.storage.discussion_vectors import DiscussionVectorStore
 from research_agent.storage.discussions import DiscussionRepository
 from research_agent.storage.ideas import IdeaRepository
 from research_agent.storage.searches import SearchRepository
@@ -43,6 +44,7 @@ class ChatSession:
     ideas: IdeaRepository
     searches: SearchRepository
     vectors: IdeaVectorStore
+    discussion_vectors: DiscussionVectorStore
     keeper: MemoryKeeper
     orch: Orchestrator
     searcher: Searcher
@@ -74,7 +76,15 @@ class ChatSession:
         if use_chroma is None:
             use_chroma = not bool(os.environ.get("RESEARCH_AGENT_TEST_MODE"))
         vectors = IdeaVectorStore(cfg.chroma_dir, use_chroma=use_chroma)
-        keeper = MemoryKeeper(ideas, vectors)
+        discussion_vectors = DiscussionVectorStore(
+            cfg.chroma_dir, use_chroma=use_chroma
+        )
+        keeper = MemoryKeeper(
+            ideas,
+            vectors,
+            discussions=discussions,
+            discussion_vectors=discussion_vectors,
+        )
         orch = Orchestrator(llm, language=cfg.language)
         searcher = Searcher(llm, language=cfg.language)
         memory = WorkingMemory.new_session()
@@ -89,6 +99,7 @@ class ChatSession:
             ideas=ideas,
             searches=searches,
             vectors=vectors,
+            discussion_vectors=discussion_vectors,
             keeper=keeper,
             orch=orch,
             searcher=searcher,
@@ -101,7 +112,21 @@ class ChatSession:
         self.anchor_paper = paper
 
     def close(self) -> int:
-        """Flush memory to SQLite and close the DB. Returns messages persisted."""
-        saved = self.memory.persist(self.discussions)
+        """Flush memory to SQLite + vector index and close the DB.
+
+        Returns the number of messages newly persisted this session.
+        """
+        idea_id = self.memory.idea_id
+
+        def _index(message_id: str, msg) -> None:  # type: ignore[no-untyped-def]
+            self.keeper.index_message(
+                message_id=message_id,
+                session_id=self.memory.session_id,
+                role=msg.role,
+                content=msg.content,
+                idea_id=idea_id,
+            )
+
+        saved = self.memory.persist(self.discussions, indexer=_index)
         self.db.close()
         return saved

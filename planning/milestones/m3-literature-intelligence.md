@@ -128,9 +128,9 @@
 - 检索延迟 < 2s（在 1000 条记录规模下）
 
 **Tasks**:
-- [ ] T3.3.1.1 实现 `ResearchMemory`：讨论、论文分析的持久化与检索
-- [ ] T3.3.1.2 实现向量化流水线：新内容自动写入 ChromaDB
-- [ ] T3.3.1.3 实现语义检索：`MemoryKeeper.recall(query, top_k=5) → MemoryRecord[]`
+- [x] T3.3.1.1 跨会话讨论持久化：`WorkingMemory.persist` 在 SQLite 写入的同时调用可选 indexer，把 user / analyst / critic 三类消息推入 ChromaDB（test/fallback 走 in-memory Jaccard），论文分析结果已在 M1/M2 落到 `papers` 表
+- [x] T3.3.1.2 向量化流水线：新增 `storage/discussion_vectors.py::DiscussionVectorStore`（chroma 持久化目录与 idea 共用 `chroma_dir`），`ChatSession.close()` 自动调用 indexer
+- [x] T3.3.1.3 语义检索：`MemoryKeeper.recall_history(query, limit, exclude_session_id)` + LLM 工具 `recall_history` + slash `/recall`；返回带 role / session_id / 片段的命中并回写控制台
 - [ ] T3.3.1.4 性能测试：1000 条记录下检索延迟验证
 
 ### Story S3.3.2 — 元认知记忆

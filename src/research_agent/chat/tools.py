@@ -28,6 +28,7 @@ from research_agent.core.llm import LLMError
 from research_agent.core.loader import PaperLoadError
 from research_agent.core.paper_resolver import search_arxiv_papers
 from research_agent.search.arxiv_search import ArxivSearchError, ArxivSearchHit
+from research_agent.storage.discussions import DiscussionMessage
 from research_agent.storage.searches import StoredSearchQuery
 from research_agent.ui.formatting import render_paper_header, render_read_report
 
@@ -388,6 +389,107 @@ def exec_recent_searches(session: ChatSession, args: dict[str, Any]) -> str:
         # Also render to the console so the user sees what the model is reading.
         _render_history(session, queries)
     return _history_summary_text(queries)
+
+
+# --------------------------------------------------------------- recall
+
+
+@slash(
+    "recall",
+    summary="Search past discussions across all sessions for similar content.",
+    usage="/recall <query keywords>",
+)
+def cmd_recall(session: ChatSession, args: str) -> None:
+    query = args.strip()
+    if not query:
+        session.console.print("[yellow]Usage:[/yellow] /recall <query keywords>")
+        return
+    matches = session.keeper.recall_history(
+        query, limit=5, exclude_session_id=session.memory.session_id
+    )
+    if not matches:
+        session.console.print(
+            "[dim]Nothing recalled from past sessions. "
+            "Discussions are indexed when a session ends — keep using "
+            "/discuss and try again next session.[/dim]"
+        )
+        return
+    _render_recall(session, matches, query=query)
+
+
+def _render_recall(
+    session: ChatSession, matches: list[DiscussionMessage], *, query: str
+) -> None:
+    session.console.print(
+        f"[bold]Recalled {len(matches)} past message(s)[/bold] for: "
+        f"[cyan]{query}[/cyan]"
+    )
+    for i, m in enumerate(matches, start=1):
+        snippet = m.content.strip().replace("\n", " ")
+        if len(snippet) > 240:
+            snippet = snippet[:237] + "…"
+        session.console.print(
+            f"  [dim]{i}.[/dim] [yellow]{m.role}[/yellow] "
+            f"[dim](session {m.session_id[:8]}…)[/dim] {snippet}"
+        )
+
+
+def _recall_text(matches: list[DiscussionMessage], *, query: str) -> str:
+    if not matches:
+        return f"No prior discussion recalled for query: {query!r}."
+    lines = [f"Recalled {len(matches)} past message(s) for: {query!r}"]
+    for i, m in enumerate(matches, start=1):
+        snippet = m.content.strip().replace("\n", " ")
+        if len(snippet) > 400:
+            snippet = snippet[:397] + "…"
+        idea = m.metadata.get("idea_id") if isinstance(m.metadata, dict) else None
+        idea_tag = f" idea_id={idea}" if idea else ""
+        lines.append(
+            f"{i}. role={m.role} session={m.session_id}{idea_tag}\n   {snippet}"
+        )
+    return "\n".join(lines)
+
+
+@register_llm_tool(
+    "recall_history",
+    _function_schema(
+        "recall_history",
+        "Search the user's past discussions (across all REPL sessions) for "
+        "messages semantically similar to ``query``. Use this when the user "
+        "refers to something previously discussed (e.g. 'what did we say "
+        "about positional encodings last time?'). Returns the top matches "
+        "with role + a snippet; chain into list_ideas or load_paper if you "
+        "need the underlying artifact.",
+        {
+            "query": {
+                "type": "string",
+                "description": "Natural-language description of the topic to recall.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Number of past messages to return (default 5, max 15).",
+                "minimum": 1,
+                "maximum": 15,
+            },
+        },
+        required=["query"],
+    ),
+)
+def exec_recall_history(session: ChatSession, args: dict[str, Any]) -> str:
+    query = str(args.get("query", "")).strip()
+    if not query:
+        return "Error: query is required."
+    limit_raw = args.get("limit", 5)
+    try:
+        limit = max(1, min(int(limit_raw), 15))
+    except (TypeError, ValueError):
+        return "Error: limit must be an integer between 1 and 15."
+    matches = session.keeper.recall_history(
+        query, limit=limit, exclude_session_id=session.memory.session_id
+    )
+    if matches:
+        _render_recall(session, matches, query=query)
+    return _recall_text(matches, query=query)
 
 
 # ---------------------------------------------------------------- read

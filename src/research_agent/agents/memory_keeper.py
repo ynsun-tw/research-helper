@@ -1,8 +1,13 @@
-"""Memory Keeper — recalls related historical ideas at session start."""
+"""Memory Keeper — recalls related historical ideas + discussions."""
 
 from __future__ import annotations
 
 from research_agent.core.idea import Idea
+from research_agent.storage.discussion_vectors import (
+    INDEXABLE_ROLES,
+    DiscussionVectorStore,
+)
+from research_agent.storage.discussions import DiscussionMessage, DiscussionRepository
 from research_agent.storage.ideas import IdeaRepository
 from research_agent.storage.vector_store import IdeaVectorStore
 
@@ -10,15 +15,20 @@ LOW_SCORE_THRESHOLD = 5.0
 
 
 class MemoryKeeper:
-    """Surface similar past ideas and low-score warnings before a debate."""
+    """Surface similar past ideas, discussions, and low-score warnings."""
 
     def __init__(
         self,
         ideas: IdeaRepository,
         vectors: IdeaVectorStore,
+        *,
+        discussions: DiscussionRepository | None = None,
+        discussion_vectors: DiscussionVectorStore | None = None,
     ) -> None:
         self.ideas = ideas
         self.vectors = vectors
+        self.discussions = discussions
+        self.discussion_vectors = discussion_vectors
 
     def recall_similar(
         self,
@@ -61,3 +71,49 @@ class MemoryKeeper:
 
     def index_idea(self, idea: Idea) -> None:
         self.vectors.upsert(idea)
+
+    # ------------------------- discussion recall -------------------------
+
+    def index_message(
+        self,
+        *,
+        message_id: str,
+        session_id: str,
+        role: str,
+        content: str,
+        idea_id: str | None = None,
+    ) -> None:
+        """Index a single persisted DiscussionMessage if its role is relevant."""
+        if self.discussion_vectors is None or role not in INDEXABLE_ROLES:
+            return
+        self.discussion_vectors.upsert(
+            message_id=message_id,
+            session_id=session_id,
+            role=role,
+            content=content,
+            idea_id=idea_id,
+        )
+
+    def recall_history(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        exclude_session_id: str | None = None,
+    ) -> list[DiscussionMessage]:
+        """Return past DiscussionMessages most similar to ``query``.
+
+        Returns ``[]`` if discussion vectors/repo are unavailable. The
+        ``exclude_session_id`` knob lets callers skip the current REPL session
+        so recall is genuinely cross-session.
+        """
+        if self.discussion_vectors is None or self.discussions is None:
+            return []
+        ids = self.discussion_vectors.query_similar(
+            query, limit=limit, exclude_session_id=exclude_session_id
+        )
+        if not ids:
+            return []
+        by_id = self.discussions.get_many(ids)
+        # Preserve similarity order.
+        return [by_id[mid] for mid in ids if mid in by_id]
