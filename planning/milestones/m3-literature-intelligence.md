@@ -38,6 +38,7 @@
 - [x] T3.1.1.2 搜索结果持久化（M3.1 切片：`search_queries` + `search_results` 表 + `SearchRepository`；`/history [N]` 跨会话查看；缓存 TTL 等高级策略并入完整 Searcher Agent）
 - [x] T3.1.1.3 结果去重标记：`SearchRepository.already_read` 与 `papers` 表 join，`/search` 输出表格里用 ✓ 标已读
 - [x] T3.1.1.4 单元测试：`tests/unit/test_searches.py`（repo 顺序/限额/读标记/legacy DB 迁移 + `cmd_search`/`cmd_history` 集成）
+- [x] T3.1.1.5 LLM-callable 历史（M3.1 v2 切片）：注册 `recent_searches(limit?)` 工具，让自然语言（"打开我昨天搜过的 BERT"）能先查历史拿 `arxiv_id` 再 `load_paper`；测试见 `tests/unit/test_chat_recent_searches.py`
 
 ### Story S3.1.2 — Semantic Scholar 集成
 

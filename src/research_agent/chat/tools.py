@@ -267,6 +267,57 @@ def _render_history(session: ChatSession, queries: list[StoredSearchQuery]) -> N
     )
 
 
+def _history_summary_text(queries: list[StoredSearchQuery]) -> str:
+    """Plain-text rendering for the LLM tool result; arxiv_ids stay machine-readable."""
+    if not queries:
+        return "No search history yet."
+    lines: list[str] = ["Recent searches (most recent first):"]
+    for i, q in enumerate(queries, start=1):
+        read_count = sum(1 for h in q.hits if h.read)
+        lines.append(
+            f"{i}. [{q.created_at}] source={q.source} "
+            f'query="{q.query}" — {len(q.hits)} hit(s), '
+            f"{read_count} already read"
+        )
+        for h in q.hits:
+            year = h.published[:4] if h.published else "—"
+            mark = " [READ]" if h.read else ""
+            title = h.title if len(h.title) <= 100 else h.title[:97] + "…"
+            lines.append(f"   - {h.arxiv_id} ({year}) {title}{mark}")
+    return "\n".join(lines)
+
+
+@register_llm_tool(
+    "recent_searches",
+    _function_schema(
+        "recent_searches",
+        "List recent /search queries (across past sessions) along with their "
+        "hits and which arXiv ids the user has already loaded. Use this when "
+        "the user refers to a prior search (e.g. 'open the BERT paper from "
+        "yesterday') to recover the right arxiv_id, then chain into load_paper.",
+        {
+            "limit": {
+                "type": "integer",
+                "description": "How many recent queries to return (default 10, max 25).",
+                "minimum": 1,
+                "maximum": 25,
+            },
+        },
+    ),
+)
+def exec_recent_searches(session: ChatSession, args: dict[str, Any]) -> str:
+    limit_raw = args.get("limit", 10)
+    try:
+        limit = max(1, min(int(limit_raw), 25))
+    except (TypeError, ValueError):
+        return "Error: limit must be an integer between 1 and 25."
+    queries = session.searches.recent_queries(limit=limit)
+    if queries:
+        # Also render to the console so the user sees what the model is reading.
+        _render_history(session, queries)
+    return _history_summary_text(queries)
+
+
 # ---------------------------------------------------------------- read
 
 
