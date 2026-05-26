@@ -177,7 +177,7 @@
   `agents/writing_pipeline.py` 承载 `WritingReview` / `ReviewedDraft`
   数据类型 + helpers（TYPE_CHECKING 解决与 scribe 的循环引用）。
 
-### Story S4.3.2 — 用户选择与反馈
+### Story S4.3.2 — 用户选择与反馈 [x] COMPLETED
 
 **验收条件**:
 - 展示原版 + 修订版，用户选择采纳哪些修改
@@ -185,9 +185,22 @@
 - 选择结果作为风格学习样本（E4.1.3 的输入）
 
 **Tasks**:
-- [ ] T4.3.2.1 实现 diff 视图：展示修订前后的差异
-- [ ] T4.3.2.2 实现分项选择：用户逐条决定是否采纳审查意见
-- [ ] T4.3.2.3 将用户选择同步到风格学习系统
+- [x] T4.3.2.1 实现 diff 视图 — `cli_review._render_diff` 使用
+  `difflib.unified_diff` 输出，Rich 着色（红 = 删除、绿 = 新增、
+  cyan = hunk header）。
+- [x] T4.3.2.2 实现分项选择：用户逐条决定是否采纳审查意见 —
+  `--interactive / -i` 标志触发 `_interactive_select`，每条
+  issue / suggestion 都走 [y/N] 提示，过滤后的 review 列表
+  喂给 `Scribe.revise`；全 reject 时复用 S4.3.1 的 no-op
+  短路（不再多花 LLM 调用）。`prompt_fn` 可注入便于测试。
+- [x] T4.3.2.3 将用户选择同步到风格学习系统 — 新增
+  `storage/draft_revisions.py` (`DraftRevision` +
+  `DraftRevisionRepository`) 和对应 SQLite schema；保存
+  (section, original, revised, selected/rejected issues &
+  suggestions, interactive flag)。`--save` / `--no-save` 控
+  制持久化；交互模式默认启用。当 revision 等于 original
+  （短路情形）跳过写入，避免污染学习语料。共 12 unit tests
+  覆盖 repo CRUD + 交互选择 + 持久化 + 部分采纳。
 
 ---
 

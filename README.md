@@ -309,6 +309,20 @@ The console prints four panels (original draft, analyst review,
 critic review, revised draft); `--output review.md` also writes the
 whole bundle to a Markdown file for diffing.
 
+```bash
+research review drafts/intro.md --section introduction --interactive
+```
+
+Pass `--interactive` to walk through each reviewer issue and
+suggestion one at a time (y / N). The Scribe revision will only
+address the items you accepted, and at the end you get a coloured
+unified diff between original and revised. The (original, revised,
+selected_*, rejected_*) tuple is persisted to the
+`draft_revisions` SQLite table by default — pass `--no-save` to opt
+out. S4.1.3 (continuous fingerprint learning) consumes these rows
+to keep the fingerprint in sync with how you actually edit Scribe
+output.
+
 ## Development
 
 ```bash

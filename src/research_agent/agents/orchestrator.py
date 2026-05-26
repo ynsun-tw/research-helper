@@ -258,6 +258,30 @@ class Orchestrator:
             critic_conclusion=critic_text,
         )
 
+    async def collect_writing_reviews_async(
+        self,
+        draft: Draft,
+    ) -> list[WritingReview]:
+        """Run analyst + critic writing reviews in parallel.
+
+        Split out from :meth:`writing_review_pipeline_async` so the
+        S4.3.2 interactive flow can present the reviews to the user
+        and feed only the *selected* items into Scribe.revise.
+        """
+        analyst_review, critic_review = await asyncio.gather(
+            asyncio.to_thread(
+                self.writing_analyst.review_writing, draft.text, draft.section
+            ),
+            asyncio.to_thread(
+                self.writing_critic.review_writing, draft.text, draft.section
+            ),
+        )
+        return [analyst_review, critic_review]
+
+    def collect_writing_reviews(self, draft: Draft) -> list[WritingReview]:
+        """Sync wrapper around :meth:`collect_writing_reviews_async`."""
+        return asyncio.run(self.collect_writing_reviews_async(draft))
+
     async def writing_review_pipeline_async(
         self,
         scribe: Scribe,
@@ -270,15 +294,7 @@ class Orchestrator:
         Reviews run in parallel via ``asyncio.gather``. The revision
         step is a single LLM call after both reviews finish.
         """
-        analyst_review, critic_review = await asyncio.gather(
-            asyncio.to_thread(
-                self.writing_analyst.review_writing, draft.text, draft.section
-            ),
-            asyncio.to_thread(
-                self.writing_critic.review_writing, draft.text, draft.section
-            ),
-        )
-        reviews: list[WritingReview] = [analyst_review, critic_review]
+        reviews = await self.collect_writing_reviews_async(draft)
         revised = await asyncio.to_thread(
             scribe.revise, draft, reviews, fingerprint=fingerprint
         )

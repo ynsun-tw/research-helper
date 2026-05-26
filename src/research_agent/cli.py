@@ -351,12 +351,39 @@ def review_command(
         "-o",
         help="Optional Markdown file to persist the review bundle to.",
     ),
+    interactive: bool = typer.Option(
+        False,
+        "--interactive",
+        "-i",
+        help=(
+            "Walk through each reviewer issue / suggestion and pick "
+            "which ones to act on. Implies --save by default."
+        ),
+    ),
+    save: bool = typer.Option(
+        False,
+        "--save",
+        help=(
+            "Persist the (original, revised) pair to the local "
+            "draft_revisions table for S4.1.3 style learning."
+        ),
+    ),
+    no_save: bool = typer.Option(
+        False,
+        "--no-save",
+        help="Skip persistence even when --interactive would normally save.",
+    ),
 ) -> None:
     """Run the auto-review pipeline: Scribe → Analyst+Critic → Scribe.
 
     Analyst flags weak argumentation and missing differentiation from
     related work; Critic flags overclaim and unsupported conclusions;
     Scribe produces a revised draft that addresses both reviews.
+
+    Pass ``--interactive`` to pick which reviewer suggestions to act
+    on; the revision will only address the items you accepted, and
+    the (original, revised) pair is saved for style learning unless
+    you also pass ``--no-save``.
     """
     cfg = _ensure_api_key()
     path = Path(draft_file).expanduser()
@@ -364,6 +391,7 @@ def review_command(
         console.print(f"[red]Error:[/red] {path} does not exist.")
         raise typer.Exit(code=1)
     out_path = Path(output).expanduser() if output.strip() else None
+    effective_save = save or (interactive and not no_save)
     run_review(
         cfg,
         console,
@@ -371,6 +399,8 @@ def review_command(
         section=section,
         target_words=target_words,
         output=out_path,
+        interactive=interactive,
+        save=effective_save,
     )
 
 

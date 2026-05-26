@@ -123,6 +123,25 @@ CREATE TABLE IF NOT EXISTS style_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_style_samples_paper
     ON style_samples(paper_id);
+
+-- M4 S4.3.2: (original, revised) draft pairs harvested from the
+-- interactive writing-review loop. The ``selected_*`` / ``rejected_*``
+-- columns let S4.1.3 know which reviewer feedback the user chose to
+-- act on - the diff that follows is the signal we want to learn from.
+CREATE TABLE IF NOT EXISTS draft_revisions (
+    id                    TEXT PRIMARY KEY,
+    section               TEXT NOT NULL,
+    original_text         TEXT NOT NULL,
+    revised_text          TEXT NOT NULL,
+    selected_issues       TEXT NOT NULL DEFAULT '[]',
+    selected_suggestions  TEXT NOT NULL DEFAULT '[]',
+    rejected_issues       TEXT NOT NULL DEFAULT '[]',
+    rejected_suggestions  TEXT NOT NULL DEFAULT '[]',
+    interactive           INTEGER NOT NULL DEFAULT 0,
+    created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_draft_revisions_created
+    ON draft_revisions(created_at);
 """
 
 
