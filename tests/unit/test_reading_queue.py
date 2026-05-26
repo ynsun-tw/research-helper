@@ -306,8 +306,10 @@ def test_load_and_analyze_marks_queued_paper_done(
     session, _ = _make_session(tmp_path)
     session.queue.add("1706.03762", title="Attention")
 
+    # Real paper ids are prefixed; this guards against regressing the
+    # prefix-strip needed to find the matching queue entry.
     paper = Paper(
-        id="1706.03762",
+        id="arxiv:1706.03762",
         title="Attention Is All You Need",
         authors=["A"],
         abstract="abs",

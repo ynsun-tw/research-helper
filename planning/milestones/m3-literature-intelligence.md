@@ -99,7 +99,7 @@
 - [x] T3.2.2.1 `/queue read` 取下一篇 pending 并复用 `_load_and_analyze` 流程
 - [x] T3.2.2.2 手动 `/queue done|skip <arxiv-id>` + 自动 mark done on success
 - [x] T3.2.2.3 队列状态持久化（SQLite，FIFO by `added_at`）；LLM 可调 `queue_next` 拿下一篇 → 链入 `load_paper`
-- [ ] T3.2.2.4 E2E 测试：批量读取 3 篇论文的完整流程（单元层面已覆盖 `/queue read` + auto-mark-done + FIFO，见 `tests/unit/test_reading_queue.py`）
+- [x] T3.2.2.4 E2E 测试：`tests/e2e/test_queue_batch_read.py` 用 typer `CliRunner` 真跑 `/queue add` × 3 → `/queue read` × 3 → `/queue list all` 完整脚本，断言 console 输出 + SQLite 落地（3 个 queue entry 全 done，3 篇论文都进 `PaperRepository`）。**顺带修了一个真实 bug**：`_load_and_analyze` 用 `paper.id` (`arxiv:1706.03762`) 查队列，但 queue 存的是 raw arxiv id (`1706.03762`)，导致 auto-mark-done 在真实链路上从来没生效；之前的单测把 `paper.id` 直接写成 `"1706.03762"` 把这个 bug 盖住了。修复 + 单测对齐真实 prefix。还覆盖了「队列清空后再 `/queue read` 给出 empty 提示而非 crash」边界。
 
 ### Story S3.2.3 — 动态搜索策略调整
 

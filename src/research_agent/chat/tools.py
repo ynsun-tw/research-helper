@@ -1122,10 +1122,16 @@ def _load_and_analyze(session: ChatSession, source: str) -> str | None:
         "system",
         f"Loaded and analyzed paper: {paper.title} ({paper.id})",
     )
-    if session.queue.get(paper.id) is not None:
-        session.queue.set_status(paper.id, "done")
+    # Paper ids are prefixed (arxiv:1706.03762 or local:<sha1>) but the
+    # reading queue stores raw arXiv ids. Strip the prefix before lookup.
+    queue_lookup_id = (
+        paper.id[len("arxiv:"):] if paper.id.startswith("arxiv:") else paper.id
+    )
+    if session.queue.get(queue_lookup_id) is not None:
+        session.queue.set_status(queue_lookup_id, "done")
         session.console.print(
-            f"[dim]✓ Marked[/dim] {paper.id} [dim]as done in the reading queue.[/dim]"
+            f"[dim]✓ Marked[/dim] {queue_lookup_id} "
+            "[dim]as done in the reading queue.[/dim]"
         )
     session.debate.rounds.clear()
     session.idea_seed = ""
