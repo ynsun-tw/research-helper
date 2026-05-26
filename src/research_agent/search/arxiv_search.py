@@ -16,6 +16,14 @@ ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ATOM_NS = "http://www.w3.org/2005/Atom"
 ARXIV_ABS_RE = re.compile(r"arxiv\.org/abs/([^/\s]+)", re.IGNORECASE)
 
+# arXiv asks polite clients to identify themselves with a contact URL and
+# limit requests to one per ~3 seconds. We honour both by default.
+DEFAULT_USER_AGENT = (
+    "research-agent/0.1 (+https://github.com/research-agent; "
+    "polite-cli-multi-agent-research-assistant)"
+)
+DEFAULT_MIN_REQUEST_INTERVAL = 3.0
+
 
 class ArxivSearchError(Exception):
     """Raised when arXiv search fails."""
@@ -44,7 +52,17 @@ class ArxivSearcher:
       ``rate_limit_backoff``
     - everything else (DNS, refused connection, 4xx other than 429, 5xx
       that doesn't recur) fails fast - retries don't fix those.
+
+    Politeness: a class-level monotonic clock ensures every actual HTTP
+    request is spaced by at least ``min_request_interval`` seconds (default
+    3.0, per arXiv TOS). The state is class-level so the typical
+    ``ArxivSearcher().search(...)`` usage in :mod:`paper_resolver` -
+    which builds a fresh instance per call - still honours the gap.
+    Tests pass ``min_request_interval=0`` to opt out.
     """
+
+    # Process-wide last-request timestamp (monotonic seconds).
+    _last_request_at: float = 0.0
 
     def __init__(
         self,
@@ -53,20 +71,47 @@ class ArxivSearcher:
         retries: int = 2,
         retry_backoff: float = 1.5,
         rate_limit_backoff: float = 3.0,
+        min_request_interval: float = DEFAULT_MIN_REQUEST_INTERVAL,
+        user_agent: str | None = None,
     ) -> None:
         self.timeout = timeout
         self.retries = max(0, retries)
         self.retry_backoff = max(0.0, retry_backoff)
         self.rate_limit_backoff = max(0.0, rate_limit_backoff)
+        self.min_request_interval = max(0.0, min_request_interval)
+        self.user_agent = user_agent or DEFAULT_USER_AGENT
+
+    def _await_throttle(self) -> None:
+        """Sleep just long enough that the next request respects the TOS gap.
+
+        The very first request in a process makes no wait - the gap only
+        applies *between* requests. ``_last_request_at == 0.0`` is the
+        "never called" sentinel.
+        """
+        if self.min_request_interval <= 0:
+            return
+        last = ArxivSearcher._last_request_at
+        if last == 0.0:
+            return
+        wait = self.min_request_interval - (time.monotonic() - last)
+        if wait > 0:
+            time.sleep(wait)
+
+    def _mark_request_done(self) -> None:
+        ArxivSearcher._last_request_at = time.monotonic()
 
     def search(self, query: str, *, max_results: int = 5) -> list[ArxivSearchHit]:
         q = urllib.parse.quote(f"all:{query.strip()}")
         url = f"{ARXIV_API_URL}?search_query={q}&start=0&max_results={max_results}"
-        req = urllib.request.Request(url, headers={"User-Agent": "research-agent/0.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": self.user_agent})
 
         attempts = self.retries + 1
         last_exc: BaseException | None = None
         for attempt in range(1, attempts + 1):
+            self._await_throttle()
+            # Record intent-to-call *before* urlopen so timeouts / 429s
+            # still count toward the next request's gap.
+            self._mark_request_done()
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     data = resp.read()

@@ -28,6 +28,12 @@ def _http_error(code: int, *, retry_after: str | None = None) -> urllib.error.HT
         fp=io.BytesIO(b""),
     )
 
+
+@pytest.fixture(autouse=True)
+def _reset_arxiv_throttle() -> None:
+    """Reset the class-level throttle timestamp before every test."""
+    ArxivSearcher._last_request_at = 0.0
+
 SAMPLE_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <entry>
@@ -69,7 +75,9 @@ def test_search_uses_http(monkeypatch: pytest.MonkeyPatch) -> None:
         "research_agent.search.arxiv_search.urllib.request.urlopen",
         lambda *a, **k: FakeResp(),
     )
-    hits = ArxivSearcher().search("attention transformer", max_results=5)
+    hits = ArxivSearcher(min_request_interval=0).search(
+        "attention transformer", max_results=5
+    )
     assert hits[0].arxiv_id.startswith("1706")
 
 
@@ -86,7 +94,9 @@ def test_search_wraps_socket_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
         "research_agent.search.arxiv_search.time.sleep", lambda _s: None
     )
     with pytest.raises(ArxivSearchError) as exc_info:
-        ArxivSearcher(timeout=1.0, retries=0).search("anything")
+        ArxivSearcher(timeout=1.0, retries=0, min_request_interval=0).search(
+            "anything"
+        )
     assert "timed out" in str(exc_info.value)
 
 
@@ -117,7 +127,9 @@ def test_search_retries_once_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(
         "research_agent.search.arxiv_search.time.sleep", lambda s: sleeps.append(s)
     )
-    hits = ArxivSearcher(timeout=1.0, retries=1, retry_backoff=0.05).search("x")
+    hits = ArxivSearcher(
+        timeout=1.0, retries=1, retry_backoff=0.05, min_request_interval=0
+    ).search("x")
     assert len(hits) == 2
     assert len(calls) == 2
     assert sleeps == [0.05]
@@ -151,7 +163,9 @@ def test_search_retries_url_error_when_reason_is_timeout(
     monkeypatch.setattr(
         "research_agent.search.arxiv_search.time.sleep", lambda _s: None
     )
-    hits = ArxivSearcher(timeout=1.0, retries=1, retry_backoff=0.0).search("x")
+    hits = ArxivSearcher(
+        timeout=1.0, retries=1, retry_backoff=0.0, min_request_interval=0
+    ).search("x")
     assert len(hits) == 2
     assert len(calls) == 2
 
@@ -170,7 +184,7 @@ def test_search_non_timeout_url_error_fails_fast(
         "research_agent.search.arxiv_search.urllib.request.urlopen", fake_urlopen
     )
     with pytest.raises(ArxivSearchError) as exc_info:
-        ArxivSearcher(timeout=1.0, retries=3).search("x")
+        ArxivSearcher(timeout=1.0, retries=3, min_request_interval=0).search("x")
     assert len(calls) == 1
     assert "Name or service not known" in str(exc_info.value)
 
@@ -202,7 +216,9 @@ def test_search_retries_on_http_429(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "research_agent.search.arxiv_search.time.sleep", lambda s: sleeps.append(s)
     )
-    hits = ArxivSearcher(retries=2, rate_limit_backoff=2.0).search("x")
+    hits = ArxivSearcher(
+        retries=2, rate_limit_backoff=2.0, min_request_interval=0
+    ).search("x")
     assert len(hits) == 2
     assert calls == [1, 1]
     # First retry uses base backoff (2 * 2**0 = 2.0).
@@ -237,7 +253,9 @@ def test_search_429_honours_retry_after_header(
     monkeypatch.setattr(
         "research_agent.search.arxiv_search.time.sleep", lambda s: sleeps.append(s)
     )
-    ArxivSearcher(retries=1, rate_limit_backoff=0.1).search("x")
+    ArxivSearcher(
+        retries=1, rate_limit_backoff=0.1, min_request_interval=0
+    ).search("x")
     assert sleeps == [5.0]
 
 
@@ -250,7 +268,9 @@ def test_search_429_gives_up_after_retries(monkeypatch: pytest.MonkeyPatch) -> N
         "research_agent.search.arxiv_search.time.sleep", lambda _s: None
     )
     with pytest.raises(ArxivSearchError) as exc_info:
-        ArxivSearcher(retries=2, rate_limit_backoff=0.0).search("x")
+        ArxivSearcher(
+            retries=2, rate_limit_backoff=0.0, min_request_interval=0
+        ).search("x")
     msg = str(exc_info.value)
     assert "rate-limit" in msg
     assert "HTTP 429" in msg or "429" in msg
@@ -265,10 +285,127 @@ def test_search_non_429_http_error_includes_url(
         lambda *a, **k: (_ for _ in ()).throw(_http_error(500)),
     )
     with pytest.raises(ArxivSearchError) as exc_info:
-        ArxivSearcher(retries=2).search("transformer")
+        ArxivSearcher(retries=2, min_request_interval=0).search("transformer")
     msg = str(exc_info.value)
     assert "HTTP 500" in msg
     assert "export.arxiv.org" in msg
+
+
+def test_throttle_blocks_second_request_within_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two back-to-back searches must sleep to respect arXiv's 3s gap."""
+
+    class FakeResp:
+        def read(self) -> bytes:
+            return SAMPLE_FEED
+
+        def __enter__(self) -> FakeResp:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    # Fake clock anchored at 100.0 so we never collide with the 0.0
+    # "never called" sentinel. Calls don't advance time, so the gap
+    # between requests is always 0.
+    monkeypatch.setattr(
+        "research_agent.search.arxiv_search.time.monotonic", lambda: 100.0
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        "research_agent.search.arxiv_search.time.sleep",
+        lambda s: sleeps.append(s),
+    )
+    monkeypatch.setattr(
+        "research_agent.search.arxiv_search.urllib.request.urlopen",
+        lambda *a, **k: FakeResp(),
+    )
+    s = ArxivSearcher(min_request_interval=3.0, retries=0)
+    s.search("a")
+    s.search("b")
+    # First call: sentinel == 0.0 so no wait. Second call: last=100,
+    # now=100, elapsed=0 < 3.0 so sleeps the full interval.
+    assert sleeps == [3.0]
+
+
+def test_throttle_disabled_when_interval_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeResp:
+        def read(self) -> bytes:
+            return SAMPLE_FEED
+
+        def __enter__(self) -> FakeResp:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        "research_agent.search.arxiv_search.time.sleep",
+        lambda s: sleeps.append(s),
+    )
+    monkeypatch.setattr(
+        "research_agent.search.arxiv_search.urllib.request.urlopen",
+        lambda *a, **k: FakeResp(),
+    )
+    s = ArxivSearcher(min_request_interval=0.0, retries=0)
+    s.search("a")
+    s.search("b")
+    assert sleeps == []
+
+
+def test_default_user_agent_identifies_research_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """arXiv 429s anonymous traffic more aggressively; advertise who we are."""
+    captured: dict[str, str] = {}
+
+    class FakeResp:
+        def read(self) -> bytes:
+            return SAMPLE_FEED
+
+        def __enter__(self) -> FakeResp:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    def fake_urlopen(req: urllib.request.Request, *_a: object, **_kw: object) -> FakeResp:
+        captured["ua"] = req.get_header("User-agent")
+        return FakeResp()
+
+    monkeypatch.setattr(
+        "research_agent.search.arxiv_search.urllib.request.urlopen", fake_urlopen
+    )
+    ArxivSearcher(min_request_interval=0).search("x")
+    ua = captured["ua"]
+    assert "research-agent" in ua
+    assert "github.com" in ua  # contact url present
+
+
+def test_custom_user_agent_overrides_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+
+    class FakeResp:
+        def read(self) -> bytes:
+            return SAMPLE_FEED
+
+        def __enter__(self) -> FakeResp:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    def fake_urlopen(req: urllib.request.Request, *_a: object, **_kw: object) -> FakeResp:
+        captured["ua"] = req.get_header("User-agent")
+        return FakeResp()
+
+    monkeypatch.setattr(
+        "research_agent.search.arxiv_search.urllib.request.urlopen", fake_urlopen
+    )
+    ArxivSearcher(min_request_interval=0, user_agent="custom-bot/1.0").search("x")
+    assert captured["ua"] == "custom-bot/1.0"
 
 
 def test_retry_after_parser() -> None:
@@ -298,5 +435,5 @@ def test_search_wraps_xml_parse_errors(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda *a, **k: FakeResp(),
     )
     with pytest.raises(ArxivSearchError) as exc_info:
-        ArxivSearcher().search("x")
+        ArxivSearcher(min_request_interval=0).search("x")
     assert "unparseable" in str(exc_info.value)
