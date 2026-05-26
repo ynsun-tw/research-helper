@@ -100,7 +100,10 @@ line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# E501 is not in ruff's default `E` group (it's left to the formatter);
+# we opt in explicitly so the 100-char limit is enforced by `ruff check`
+# locally and in CI, matching the limit other linters in this repo use.
+select = ["E", "E501", "F", "I", "UP", "B", "SIM", "RUF"]
 ignore = ["B008"]
 
 [tool.ruff.lint.isort]

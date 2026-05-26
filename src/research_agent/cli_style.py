@@ -313,7 +313,9 @@ def run_style_history(cfg: Config, console: Console) -> int:
     return 0
 
 
-def _render_fingerprint(console: Console, fp: Fingerprint, path) -> None:  # type: ignore[no-untyped-def]
+def _render_fingerprint(  # type: ignore[no-untyped-def]
+    console: Console, fp: Fingerprint, path
+) -> None:
     table = Table(title=f"Style fingerprint  ({path.name})", show_header=True)
     table.add_column("Layer", style="cyan")
     table.add_column("Key")

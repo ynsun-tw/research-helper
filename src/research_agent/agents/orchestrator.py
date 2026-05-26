@@ -404,7 +404,8 @@ def _derive_consensus_conflicts(
         top_objection = critic.objections[0][:120]
         top_contribution = analyst.contributions[0][:120]
         conflicts.append(
-            f"Critic challenges ('{top_objection}…') vs Analyst highlight ('{top_contribution}…')."
+            f"Critic challenges ('{top_objection}…') vs Analyst highlight "
+            f"('{top_contribution}…')."
         )
     if critic.support_score <= 5 and analyst.potential_impact:
         conflicts.append("Critic is skeptical despite Analyst noting non-trivial potential impact.")
