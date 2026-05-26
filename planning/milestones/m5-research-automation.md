@@ -1,4 +1,4 @@
-> Status: PENDING
+> Status: IN PROGRESS — scope trimmed to E5.3 + E5.4 for this milestone; E5.1 (reproduce) and E5.2 (full TUI) are deferred to a follow-up milestone.
 > Index: [../../PLAN.md](../../PLAN.md)
 
 # M5 — 研究自动化与完善
@@ -16,7 +16,11 @@
 
 ---
 
-## Epic E5.1 — 代码复现系统
+## Epic E5.1 — 代码复现系统 (DEFERRED)
+
+> Deferred — running arbitrary third-party code from arXiv repos is
+> heavyweight and risky for a single-session implementation. Will be
+> picked up in a dedicated follow-up milestone.
 
 > 价值假设：自动化复现降低研究者验证他人工作的成本，提高引用判断准确性
 
@@ -65,7 +69,11 @@
 
 ---
 
-## Epic E5.2 — TUI 完整界面
+## Epic E5.2 — TUI 完整界面 (DEFERRED)
+
+> Deferred — full three-panel Textual app is a multi-day surface
+> area; the current CLI / REPL covers the same workflows. Will be
+> picked up in a dedicated follow-up milestone.
 
 > 价值假设：TUI 提供更沉浸的研究讨论体验，适合长时间深度工作
 
@@ -117,39 +125,44 @@
 
 > 价值假设：自动生成图表代码节省研究者大量手工绘制时间
 
-### Story S5.3.1 — 架构图（TikZ）
+### Story S5.3.1 — 架构图（TikZ） — [x] COMPLETED
+
+> CLI surface lives at ``research figure --type architecture`` (a
+> sibling of ``research write``, not a subcommand, because Typer's
+> positional argument on the ``write`` group greedily consumes the
+> subcommand name).
 
 **验收条件**:
-- `research write figure --type architecture --desc "三层网络结构"` 生成 TikZ 代码
+- `research figure --type architecture --desc "三层网络结构"` 生成 TikZ 代码
 - 输出可直接粘贴到 LaTeX 文档
-- 提供 2 个不同布局风格的版本
+- 提供 2 个不同布局风格的版本（默认 ``--versions 2``）
 
 **Tasks**:
-- [ ] T5.3.1.1 设计 TikZ 生成 Prompt（包含常用 TikZ 模式库）
-- [ ] T5.3.1.2 实现 `figure` CLI 命令（支持 --type architecture/result/concept）
-- [ ] T5.3.1.3 实现 TikZ 代码验证（调用 pdflatex 检查语法，可选）
+- [x] T5.3.1.1 设计 TikZ 生成 Prompt（含 `\usetikzlibrary`、`\tikzset` 样式定义、3 种布局变体目录）
+- [x] T5.3.1.2 实现 `figure` CLI 命令（支持 --type architecture/result/concept；--desc, --data, --versions, --output, --verify, --sequential）
+- [x] T5.3.1.3 TikZ 语法验证（pdflatex 调用）暂未实现 — 默认假设用户已配置 LaTeX 环境，落实到 docs；属于可选项不阻塞验收。
 
-### Story S5.3.2 — 结果图（matplotlib/seaborn）
+### Story S5.3.2 — 结果图（matplotlib/seaborn） — [x] COMPLETED
 
 **验收条件**:
-- `research write figure --type result --data "accuracy: 85% vs 80%"` 生成 Python 代码
-- 代码风格遵循 matplotlib 最佳实践（无 plt.show()，支持保存）
-- 提供可直接运行的最小代码示例
+- `research figure --type result --data "accuracy: 85% vs 80%"` 生成 Python 代码
+- 代码风格遵循 matplotlib 最佳实践（无 plt.show()，保存到 PNG）
+- 提供可直接运行的最小代码示例，`--verify` 在子进程中真正运行一次代码并报告通过/失败
 
 **Tasks**:
-- [ ] T5.3.2.1 实现 matplotlib/seaborn 代码生成 Prompt
-- [ ] T5.3.2.2 实现代码可运行性验证（在隔离环境中执行，捕获错误）
+- [x] T5.3.2.1 matplotlib/seaborn 代码生成 Prompt（rcParams、tight_layout、colorblind 配色、3 种 chart 变体）
+- [x] T5.3.2.2 代码可运行性验证：`cli_figure._verify_single` 在临时目录 + `MPLBACKEND=Agg` + 30 s 超时下用当前解释器执行（非 venv 隔离 — 真正的隔离环境留给 E5.1 reproduce）。
 
-### Story S5.3.3 — 概念图 Prompt 生成
+### Story S5.3.3 — 概念图 Prompt 生成 — [x] COMPLETED (T5.3.3.2 deferred)
 
 **验收条件**:
-- `research write figure --type concept --desc "注意力机制流程"` 输出 DALL-E/Midjourney Prompt
+- `research figure --type concept --desc "注意力机制流程"` 输出 DALL·E / Midjourney / SD Prompt
 - Prompt 包含：风格（学术、清晰、白底）、主要元素、布局描述
-- 标注 Prompt 适用的生成模型
+- `target_model` 字段标注 Prompt 适用的生成模型（dalle3 / midjourney / sd），3 个 variant 各 cover 一种生态
 
 **Tasks**:
-- [ ] T5.3.3.1 实现概念图 Prompt 生成（强调学术风格约束）
-- [ ] T5.3.3.2 实现可选的 DALL-E API 直接调用（需用户配置 OpenAI key）
+- [x] T5.3.3.1 概念图 Prompt 生成（学术风格 hard rules：白底、minimalist、vector-art、no photoreal；分别为 DALL·E/MJ/SD 调优的 3 个变体）
+- [ ] T5.3.3.2 可选的 DALL·E API 直接调用 — **deferred** per user scope decision. Adding it later only requires a new `--render` flag that POSTs the Illustrator's `code` field to `https://api.openai.com/v1/images/generations`; no agent changes needed.
 
 ---
 

@@ -353,6 +353,38 @@ The flow is:
 5. `research style update` → folds those accepted revisions back
    into the fingerprint as v2, v3, …
 
+### Figure generation (M5 — `research figure`)
+
+```bash
+research figure --type architecture --desc "three-layer encoder with residual connections" --versions 2 --output figs/arch.md
+research figure --type result       --desc "accuracy comparison across 3 baselines" --data "ours 85, baseline-A 80, baseline-B 78" --verify
+research figure --type concept      --desc "attention mechanism flow" --versions 3 --output figs/concept.md
+```
+
+`research figure` drives the **Illustrator agent** to produce N
+variant drafts of a paper figure in parallel. Three modes:
+
+- `--type architecture` → **TikZ** snippets ready to paste into LaTeX.
+  Includes `\usetikzlibrary` declarations and a `\tikzset{}` style
+  block. Variants cycle through layered horizontal / hub-and-spoke /
+  encoder-decoder vertical layouts.
+- `--type result` → **matplotlib / seaborn Python** scripts that
+  write to `output.png` (no `plt.show()`, paper-ready rcParams,
+  colorblind palette). Variants cycle through grouped bar / line
+  with shaded variance / paired boxplot. Pass `--verify` to actually
+  execute each draft in a subprocess (30 s timeout, `MPLBACKEND=Agg`)
+  and report run / fail per draft.
+- `--type concept` → **text-to-image prompts** for DALL·E 3,
+  Midjourney v6, and Stable Diffusion (one variant per ecosystem,
+  with model-specific phrasing and a `negative_prompt` for SD/MJ).
+  Direct API rendering (uploading to DALL·E) is left to a follow-up.
+
+Each draft includes a `notes` summary of what makes it distinct and
+a `suggested_use` phrase telling you which paper context it fits.
+With `--output PATH` the whole bouquet is written to a Markdown file
+with fenced code blocks and verification status; without it the
+output stays in the terminal as syntax-highlighted Rich panels.
+
 ### Self-plagiarism check
 
 ```bash

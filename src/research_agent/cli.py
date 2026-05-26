@@ -21,6 +21,7 @@ from rich.table import Table
 from research_agent.agents.meta_memory import MetaMemory
 from research_agent.chat import run_chat
 from research_agent.cli_check import run_check
+from research_agent.cli_figure import run_figure
 from research_agent.cli_review import run_review
 from research_agent.cli_style import (
     run_style_fingerprint,
@@ -309,6 +310,9 @@ def write_command(
     recent discussion excerpts from your memory store. With
     ``--check-against`` it sees the body of an existing draft and is
     told not to duplicate or contradict it.
+
+    For diagrams / charts / concept-image prompts, see the sibling
+    command ``research figure``.
     """
     cfg = _ensure_api_key()
     out_path = Path(output).expanduser() if output.strip() else None
@@ -322,6 +326,93 @@ def write_command(
         target_words=target_words,
         versions=versions,
         output=out_path,
+        parallel=not sequential,
+    )
+
+
+@app.command("figure")
+def figure_command(
+    figure_type: str = typer.Option(
+        "architecture",
+        "--type",
+        "-t",
+        help=(
+            "Figure category: architecture (TikZ), result "
+            "(matplotlib/seaborn Python), concept (text-to-image "
+            "prompt for DALL·E 3 / Midjourney / SD). Aliases like "
+            "'pipeline', 'plot', 'schematic' are accepted."
+        ),
+    ),
+    description: str = typer.Option(
+        "",
+        "--desc",
+        "-d",
+        help=(
+            "Free-form description of the figure to generate, e.g. "
+            "'three-layer encoder with residual connections'."
+        ),
+    ),
+    data: str = typer.Option(
+        "",
+        "--data",
+        help=(
+            "Quantitative payload for --type result, e.g. "
+            "'accuracy: 85% (ours) vs 80% (baseline)'."
+        ),
+    ),
+    versions: int = typer.Option(
+        2,
+        "--versions",
+        "-n",
+        help="Number of variant drafts to generate (default 2).",
+    ),
+    output: str = typer.Option(
+        "",
+        "--output",
+        "-o",
+        help="Optional Markdown file to persist all drafts to.",
+    ),
+    verify: bool = typer.Option(
+        False,
+        "--verify",
+        help=(
+            "For --type result only: actually run each draft's "
+            "Python in a subprocess (30 s timeout, matplotlib Agg "
+            "backend) and report success / failure per draft."
+        ),
+    ),
+    sequential: bool = typer.Option(
+        False,
+        "--sequential",
+        help="Issue LLM calls one at a time (default: parallel via thread pool).",
+    ),
+) -> None:
+    """Generate figure code (TikZ / matplotlib / DALL·E prompt).
+
+    Emits ``--versions`` variant drafts in parallel. Each draft
+    targets a different layout (architecture), chart type (result),
+    or text-to-image model (concept), so the bouquet covers the
+    typical design space rather than three near-duplicates.
+    """
+    cfg = _ensure_api_key()
+    if not description.strip():
+        console.print(
+            "[red]Error:[/red] --desc is required (describe the figure to render)."
+        )
+        raise typer.Exit(code=1)
+    if versions <= 0:
+        console.print("[red]Error:[/red] --versions must be a positive integer.")
+        raise typer.Exit(code=1)
+    out_path = Path(output).expanduser() if output.strip() else None
+    run_figure(
+        cfg,
+        console,
+        figure_type=figure_type,
+        description=description,
+        data=data,
+        versions=versions,
+        output=out_path,
+        verify=verify,
         parallel=not sequential,
     )
 
