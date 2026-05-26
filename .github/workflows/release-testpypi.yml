@@ -1,0 +1,191 @@
+# Release to TestPyPI — manually gated.
+#
+# Trigger: Actions tab → "Release to TestPyPI" → Run workflow → enter version.
+#
+# Flow:
+#   1. verify  — input version matches __version__ + pyproject; ruff + mypy.
+#   2. test    — pytest (Py 3.11 + 3.12) with --cov-fail-under=80.
+#   3. build   — python -m build + twine check; upload dist artifact.
+#   4. ⏸ manual approval gate (via `environment: testpypi-release`).
+#   5. publish — tag v<version> on the release commit + twine upload to TestPyPI.
+#
+# One-time GitHub setup:
+#   - Settings → Secrets and variables → Actions → New repository secret
+#       Name:  TEST_PYPI_API_TOKEN
+#       Value: <a TestPyPI token starting with `pypi-...`>
+#   - Settings → Environments → New environment "testpypi-release"
+#       Required reviewers: (add yourself / your team)
+#       Optional: limit to `main` branch via deployment branch rules.
+#     The `publish` job below references this environment and will pause
+#     for human approval before running.
+#
+# Pre-release checklist (you, locally):
+#   - Bump `__version__` in src/research_agent/__init__.py
+#   - Bump `version` in pyproject.toml to the same value
+#   - Commit + push to main (or merge a release PR)
+#   - Then dispatch this workflow with the same version string.
+
+name: Release to TestPyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (must match __version__ and pyproject.toml, e.g. 0.5.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write  # publish job needs this to push the v<version> tag
+
+# Don't queue two release runs at once; a stuck approval shouldn't block
+# the second attempt forever, but we want serial behaviour.
+concurrency:
+  group: release-testpypi
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify version + lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Check input version matches __init__.py and pyproject.toml
+        run: |
+          set -euo pipefail
+          input="${{ inputs.version }}"
+          declared=$(python -c "import research_agent; print(research_agent.__version__)")
+          pp=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "input=$input  __version__=$declared  pyproject=$pp"
+          if [ "$input" != "$declared" ] || [ "$input" != "$pp" ]; then
+            echo "::error::Version mismatch — bump src/research_agent/__init__.py and pyproject.toml to $input first."
+            exit 1
+          fi
+      - name: ruff
+        run: python -m ruff check src tests
+      - name: mypy
+        run: python -m mypy src/research_agent
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: pytest
+        env:
+          # Live-network tests stay deselected; same posture as ci.yml.
+          RUN_NETWORK_TESTS: ""
+        run: |
+          python -m pytest \
+            -m "not network" \
+            --cov=src/research_agent \
+            --cov-report=term \
+            --cov-fail-under=80
+
+  build:
+    name: Build sdist + wheel
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install build + twine
+        run: |
+          python -m pip install --upgrade pip build twine
+      - name: Build distributions
+        run: python -m build
+      - name: Verify metadata
+        run: python -m twine check dist/*
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ inputs.version }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Tag + publish to TestPyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # ⏸ Manual gate. GitHub will pause this job and require a reviewer
+    # listed on the `testpypi-release` environment to click "Approve and
+    # deploy" in the workflow run UI before it starts.
+    environment:
+      name: testpypi-release
+      url: https://test.pypi.org/project/paper-research-agent/${{ inputs.version }}/
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history so we can detect existing tags.
+          fetch-depth: 0
+      - name: Refuse to overwrite an existing tag
+        run: |
+          set -euo pipefail
+          tag="v${{ inputs.version }}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "::error::Tag $tag already exists. Bump the version and try again."
+            exit 1
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ inputs.version }}
+          path: dist/
+      - name: Create + push tag v${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }} to TestPyPI"
+          git push origin "v${{ inputs.version }}"
+      - name: Upload to TestPyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+          TWINE_REPOSITORY_URL: https://test.pypi.org/legacy/
+        run: |
+          python -m pip install --upgrade twine
+          python -m twine upload --non-interactive --verbose dist/*
+      - name: Summary
+        run: |
+          {
+            echo "### TestPyPI release ✅"
+            echo ""
+            echo "- Version: \`${{ inputs.version }}\`"
+            echo "- Tag: \`v${{ inputs.version }}\`"
+            echo "- URL: https://test.pypi.org/project/paper-research-agent/${{ inputs.version }}/"
+            echo ""
+            echo "Install with:"
+            echo ""
+            echo '```bash'
+            echo "pipx install --pip-args '--index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/' paper-research-agent==${{ inputs.version }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
