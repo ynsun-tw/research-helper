@@ -1,5 +1,12 @@
 > Status: DONE
 > Index: [../../PLAN.md](../../PLAN.md)
+>
+> **M2.5 注记（2026-05）**：CLI 在 M2.5 改造为单入口对话 shell（详见
+> [../notes.md](../notes.md) ADR-006）。本里程碑里的所有能力（结构化辩论、
+> 评分体系、Idea 生命周期、anchor paper、follow-up）都被 conversational shell
+> 复用：原 `research discuss -p ...` 等价为 REPL 内 `/read <paper>` →
+> `/discuss <idea>`，自然语言输入也能通过 LLM tool calling 触发同一套工具。
+> 因此 M2 验收能力保持 DONE，仅入口形态变化。
 
 # M2 — Idea 讨论工坊
 
@@ -8,7 +15,7 @@
 **时间**: 1 周
 **前置条件**: M1 完成（Analyst、Critic、基础 CLI 可用）
 **验收标准**:
-- `research discuss -p "论文标题或arxiv id" "我的 idea"` 先检索/加载锚定论文，再辩论：首轮结构化输出；后续追问基于论文+上下文给结论
+- 在 `research` REPL 中通过 `/read <paper>` 锚定论文，`/discuss <idea>` 进入辩论：首轮结构化输出；后续追问基于论文+上下文给结论。自然语言输入也能通过 LLM tool calling 自动触发 `load_paper` + `discuss_idea`。
 - Critic 评分稳定输出 1-10 分，低于 7 分有理由说明
 - Idea 可保存、查看、更新状态
 - 对话中能看到与历史讨论的关联提醒

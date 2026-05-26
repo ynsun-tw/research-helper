@@ -82,3 +82,22 @@
 - **状态**: 已决定（M1 后增强，2026-05）
 - **原因**: 单 key 切换多模型；与 OpenAI SDK 兼容；`sk-or-` key 与 `provider/model` slug 对齐
 - **实现**: `base_url` 默认 `https://openrouter.ai/api/v1`；`api_key` 与 `base_url` 不一致时自动迁移
+
+### ADR-006: CLI 改为对话式 REPL（M2.5）
+- **状态**: 已决定（2026-05）
+- **触发**: 多子命令工具（`research read` / `discuss -p ...` / `ideas ...`）每条命令独立完成一次任务后退出，与"研究合作研究员"的对话定位不符；论文锚定/idea 状态/记忆等会话状态在子命令之间没有自然承载。
+- **决策**: 收敛到单一入口 `research` 直接进入对话 shell。仅保留 `research config` 作为非交互子命令。其余功能改由 REPL 内提供：
+  - 显式 slash 命令：`/search`、`/read`、`/discuss`、`/paper`、`/idea`、`/ideas`、`/help`、`/exit`
+  - 自然语言输入由 LLM 通过 OpenAI 风格 function/tool calling 自主调度同一套工具（`search_arxiv` / `load_paper` / `discuss_idea` / `save_current_idea` / `list_ideas`）
+- **实现要点**:
+  - 新增 `src/research_agent/chat/`：`session.py`（`ChatSession` 持 anchor_paper、debate、memory、repos）、`router.py`（slash 分发 + LLM agent loop）、`tools.py`（slash + LLM 工具注册表）
+  - 扩展 `core/llm.py`：`ChatMessage` 新增 `tool_call_id`/`tool_calls`/`name`；新增 `ToolCall`/`ChatResponse`；`LLMProvider.chat_with_tools` + `LLMClient` 走非流式 + tool 参数；`MockLLMProvider` 支持入队结构化 tool_call 响应
+  - 业务逻辑复用：`run_read` / `run_discuss` / `run_ideas_*` / `_handle_debate_turn` / `_load_anchor_paper` 维持原状，被 chat 工具薄包装
+  - Agent loop 上限 `MAX_TOOL_ITERATIONS=6`，工具错误以文本形式回灌给 LLM 而不抛异常，未知工具同样回灌错误信息
+- **影响**:
+  - `research read` / `research discuss` / `research ideas ...` 三组 typer 子命令移除（service 函数仍可被 import）
+  - `tests/unit/test_cli.py` / `tests/e2e/test_read_cli.py` 改为驱动 REPL（输入 `/read ...\n/discuss ...\n/exit`）
+  - 新增测试：`tests/unit/test_chat_router.py`（slash 分发 + LLM fallback）、`tests/unit/test_chat_tool_loop.py`（多轮 tool_call + 错误 + 循环上限）
+- **代价/风险**:
+  - REPL 单一入口让脚本/管道场景失能；如有 batch 需求，需要在后续里程碑提供 `--prompt`/`--once` 模式
+  - LLM tool calling 需要模型支持 OpenAI function-calling；mock provider 已覆盖单元测试，但部分 OpenRouter 模型行为差异需要 e2e 验证

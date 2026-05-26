@@ -1,8 +1,9 @@
-"""LLM client with provider abstraction, streaming, and retries."""
+"""LLM client with provider abstraction, streaming, retries, and tool calling."""
 
 from __future__ import annotations
 
 import time
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -19,9 +20,35 @@ class LLMError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class ToolCall:
+    """One function-call request emitted by the LLM (OpenAI-compatible)."""
+
+    id: str
+    name: str
+    arguments: str  # JSON-encoded; parse with ``json.loads`` on the executor side
+
+
+@dataclass(frozen=True, slots=True)
 class ChatMessage:
+    """One conversation message, optionally carrying tool-call metadata."""
+
     role: str
     content: str
+    tool_call_id: str | None = None
+    tool_calls: tuple[ToolCall, ...] = ()
+    name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ChatResponse:
+    """Structured LLM reply: text plus any requested tool calls."""
+
+    content: str
+    tool_calls: tuple[ToolCall, ...] = ()
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return bool(self.tool_calls)
 
 
 class LLMProvider(ABC):
@@ -35,7 +62,7 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         max_tokens: int | None = None,
     ) -> str:
-        """Return the full assistant reply."""
+        """Return the full assistant reply (text only, no tool-call dispatch)."""
 
     @abstractmethod
     def chat_stream(
@@ -46,6 +73,23 @@ class LLMProvider(ABC):
         max_tokens: int | None = None,
     ) -> Iterator[str]:
         """Yield assistant reply tokens/chunks."""
+
+    def chat_with_tools(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] = "auto",
+        temperature: float = 0.6,
+        max_tokens: int | None = None,
+    ) -> ChatResponse:
+        """Return ChatResponse with text + optional tool_calls.
+
+        Default falls back to plain ``chat`` (no tool support).
+        Subclasses that support function-calling should override this.
+        """
+        text = self.chat(messages, temperature=temperature, max_tokens=max_tokens)
+        return ChatResponse(content=text)
 
 
 class LLMClient(LLMProvider):
@@ -126,16 +170,76 @@ class LLMClient(LLMProvider):
 
         raise LLMError(_friendly_message(last_error, base_url=self.base_url)) from last_error
 
+    def chat_with_tools(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] = "auto",
+        temperature: float = 0.6,
+        max_tokens: int | None = None,
+    ) -> ChatResponse:
+        payload = _to_openai_messages(messages)
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": cast(Any, payload),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            kwargs["tools"] = list(tools)
+            kwargs["tool_choice"] = tool_choice
+
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries):
+            try:
+                resp = self._client.chat.completions.create(**kwargs)
+                msg = resp.choices[0].message
+                tcs: list[ToolCall] = []
+                for tc in msg.tool_calls or []:
+                    tcs.append(
+                        ToolCall(
+                            id=tc.id,
+                            name=tc.function.name,
+                            arguments=tc.function.arguments or "{}",
+                        )
+                    )
+                return ChatResponse(content=msg.content or "", tool_calls=tuple(tcs))
+            except (APIConnectionError, RateLimitError, APIStatusError) as exc:
+                last_error = exc
+                if attempt + 1 >= self.max_retries:
+                    break
+                time.sleep(self.base_delay * (2**attempt))
+        raise LLMError(_friendly_message(last_error, base_url=self.base_url)) from last_error
+
 
 class MockLLMProvider(LLMProvider):
-    """Deterministic LLM for unit/integration tests."""
+    """Deterministic LLM for unit/integration tests.
 
-    def __init__(self, responses: list[str] | None = None) -> None:
-        self._responses = list(responses or [])
+    Accepts a list of canned responses. Each item may be a string (text reply)
+    or a ``ChatResponse`` (text + optional tool_calls). ``chat`` returns text
+    only; ``chat_with_tools`` returns the full ``ChatResponse``.
+    """
+
+    def __init__(self, responses: list[str | ChatResponse] | None = None) -> None:
+        self._responses: list[ChatResponse] = []
+        for r in responses or []:
+            self._responses.append(_normalize_response(r))
         self.calls: list[list[ChatMessage]] = []
+        self.tool_calls_seen: list[Sequence[dict[str, Any]] | None] = []
 
-    def enqueue(self, response: str) -> None:
-        self._responses.append(response)
+    def enqueue(self, response: str | ChatResponse) -> None:
+        self._responses.append(_normalize_response(response))
+
+    def enqueue_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
+        import json
+
+        call = ToolCall(
+            id=f"call_{uuid.uuid4().hex[:8]}",
+            name=name,
+            arguments=json.dumps(arguments),
+        )
+        self._responses.append(ChatResponse(content="", tool_calls=(call,)))
 
     def chat(
         self,
@@ -154,11 +258,32 @@ class MockLLMProvider(LLMProvider):
         max_tokens: int | None = None,
     ) -> Iterator[str]:
         self.calls.append(list(messages))
+        self.tool_calls_seen.append(None)
         if not self._responses:
             yield '{"error": "no mock response queued"}'
             return
-        text = self._responses.pop(0)
-        yield text
+        yield self._responses.pop(0).content
+
+    def chat_with_tools(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] = "auto",
+        temperature: float = 0.6,
+        max_tokens: int | None = None,
+    ) -> ChatResponse:
+        self.calls.append(list(messages))
+        self.tool_calls_seen.append(list(tools) if tools else None)
+        if not self._responses:
+            return ChatResponse(content='{"error": "no mock response queued"}')
+        return self._responses.pop(0)
+
+
+def _normalize_response(r: str | ChatResponse) -> ChatResponse:
+    if isinstance(r, ChatResponse):
+        return r
+    return ChatResponse(content=r)
 
 
 def _openrouter_headers(config: Config) -> dict[str, str] | None:
@@ -171,8 +296,31 @@ def _openrouter_headers(config: Config) -> dict[str, str] | None:
     }
 
 
-def _to_openai_messages(messages: Sequence[ChatMessage]) -> list[dict[str, str]]:
-    return [{"role": m.role, "content": m.content} for m in messages]
+def _to_openai_messages(messages: Sequence[ChatMessage]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        entry: dict[str, Any] = {"role": m.role}
+        # OpenAI requires "content" key even for tool/assistant-with-tool-calls;
+        # use null only when there are tool_calls and no text content.
+        if m.tool_calls and not m.content:
+            entry["content"] = None
+        else:
+            entry["content"] = m.content
+        if m.tool_call_id is not None:
+            entry["tool_call_id"] = m.tool_call_id
+        if m.name is not None:
+            entry["name"] = m.name
+        if m.tool_calls:
+            entry["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": tc.arguments},
+                }
+                for tc in m.tool_calls
+            ]
+        out.append(entry)
+    return out
 
 
 def _friendly_message(exc: Exception | None, *, base_url: str = "") -> str:

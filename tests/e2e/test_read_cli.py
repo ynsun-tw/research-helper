@@ -1,4 +1,8 @@
-"""E2E-style CLI tests for ``research read`` (mocked network + LLM)."""
+"""E2E-style CLI tests for the conversational shell (mocked network + LLM).
+
+After M2.5 the `research` command is a single REPL. Paper loading and idea
+debate happen through slash commands inside the chat shell.
+"""
 
 from __future__ import annotations
 
@@ -64,8 +68,7 @@ def paper() -> Paper:
     )
 
 
-def test_read_local_pdf_e2e(
-    sample_pdf: Path,
+def test_repl_slash_read_runs_analysis(
     config_dir: Path,
     paper: Paper,
     monkeypatch: pytest.MonkeyPatch,
@@ -73,18 +76,20 @@ def test_read_local_pdf_e2e(
     cfg = Config(data_dir=config_dir, api_key="sk-test")
     cfg.save()
 
-    import research_agent.cli_services as svc
     from research_agent.core.llm import LLMClient, MockLLMProvider
 
-    monkeypatch.setattr(svc, "load_paper", lambda source, cache_dir: paper)
     monkeypatch.setattr(
         LLMClient,
         "from_config",
         lambda config: MockLLMProvider([ANALYST_JSON, CRITIC_JSON]),
     )
     monkeypatch.setattr("research_agent.cli._load_config", lambda: cfg)
+    monkeypatch.setattr(
+        "research_agent.chat.tools._load_anchor_paper",
+        lambda *args, **kwargs: paper,
+    )
 
-    result = runner.invoke(app, ["read", str(sample_pdf)])
+    result = runner.invoke(app, [], input="/read arxiv:1706.03762\n/exit\n")
     assert result.exit_code == 0, result.stdout
     assert "Analyst" in result.stdout
     assert "Critic" in result.stdout
@@ -94,7 +99,7 @@ def test_read_local_pdf_e2e(
     assert db_path.exists()
 
 
-def test_discuss_exit_saves_session(
+def test_repl_slash_discuss_saves_session(
     config_dir: Path,
     paper: Paper,
     monkeypatch: pytest.MonkeyPatch,
@@ -104,18 +109,26 @@ def test_discuss_exit_saves_session(
 
     from research_agent.core.llm import LLMClient, MockLLMProvider
 
-    mock = MockLLMProvider([IDEA_ANALYST_JSON, IDEA_CRITIC_JSON])
+    # First two responses fuel /read (Analyst + Critic),
+    # next two fuel /discuss (idea Analyst + idea Critic).
+    mock = MockLLMProvider(
+        [ANALYST_JSON, CRITIC_JSON, IDEA_ANALYST_JSON, IDEA_CRITIC_JSON]
+    )
     monkeypatch.setattr(LLMClient, "from_config", lambda config: mock)
     monkeypatch.setattr("research_agent.cli._load_config", lambda: cfg)
     monkeypatch.setattr(
-        "research_agent.cli_services._load_anchor_paper",
+        "research_agent.chat.tools._load_anchor_paper",
         lambda *args, **kwargs: paper,
     )
 
     result = runner.invoke(
         app,
-        ["discuss", "--paper", "arxiv:1706.03762", "Apply attention to biology"],
-        input="exit\n",
+        [],
+        input=(
+            "/read arxiv:1706.03762\n"
+            "/discuss Apply attention to biology\n"
+            "/exit\n"
+        ),
     )
     assert result.exit_code == 0, result.stdout
     assert "Session saved" in result.stdout

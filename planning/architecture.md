@@ -47,12 +47,28 @@ Research Agent 是一个本地优先的多智能体 CLI 工具，定位为研究
 
 ```
                          ┌─────────────┐
-                         │   用户(CLI)   │
+                         │   用户(REPL)  │
                          └──────┬───────┘
-                                │ 自然语言 / 命令
+                                │ /slash 或 自然语言
                     ┌───────────▼───────────┐
+                    │   Chat Router         │
+                    │   - slash 分发         │
+                    │   - LLM agent loop    │
+                    │     (tool_calls)      │
+                    │   - ChatSession 状态   │
+                    └──┬───────────┬────────┘
+                       │           │ 工具调用
+                       │  ┌────────▼─────────┐
+                       │  │  Tool Registry   │
+                       │  │  search_arxiv    │
+                       │  │  load_paper      │
+                       │  │  discuss_idea    │
+                       │  │  save_current_idea│
+                       │  │  list_ideas      │
+                       │  └────────┬─────────┘
+                                   │
+                    ┌──────────────▼─────────┐
                     │   Orchestrator        │
-                    │   - 意图解析           │
                     │   - 任务路由           │
                     │   - 输出聚合           │
                     │   - 冲突标注           │
@@ -225,7 +241,36 @@ CREATE TABLE discussions (
 
 ---
 
-## 6. 仓库布局
+## 6. CLI 形态（M2.5 起：单入口 REPL）
+
+`research` 命令默认进入对话式 shell。只保留 `research config` 作为非交互子命令；
+原先的 `read` / `discuss` / `ideas` 改为 REPL 内的 slash 命令，并通过 LLM
+function/tool calling 暴露给自然语言输入（见 ADR-006）。
+
+```
+research                          # 进入 REPL
+You> /search transformer          # 显式工具：arXiv 搜索
+You> /read arxiv:1706.03762       # 显式工具：下载 + Analyst/Critic
+You> /discuss apply to molecules  # 显式工具：辩论（基于已锚定论文）
+You> 帮我比较 A 和 B 哪个更好用      # 自然语言 → LLM 自主决定调用哪些工具
+You> /exit
+```
+
+### 6.1 Chat Loop 数据流
+
+```
+User input
+  ├─ "/cmd args"    → SLASH_COMMANDS[cmd](session, args)
+  └─ 自然语言        → LLMProvider.chat_with_tools(messages, tools=llm_tool_schemas())
+                       ├─ 返回 content（无 tool_calls）→ 渲染给用户
+                       └─ 返回 tool_calls → 逐个执行 LLM_TOOLS[name].executor(session, args)
+                          → 把结果作为 role="tool" 消息回灌 → 继续 chat_with_tools
+                          → 受 MAX_TOOL_ITERATIONS=6 限制
+ChatSession 持久状态：anchor_paper / debate_history / current_idea_id / WorkingMemory
+持久化：退出时 WorkingMemory.persist → DiscussionRepository（含 idea_id 关联）
+```
+
+### 6.2 仓库布局
 
 ```
 research-bot/
@@ -233,33 +278,44 @@ research-bot/
 ├── src/
 │   └── research_agent/
 │       ├── __init__.py
-│       ├── cli.py               # Typer CLI 入口
-│       ├── config.py            # Pydantic Settings 配置
-│       ├── core/language.py     # 回复语言 en/zh 与 prompt 注入
-│       ├── agents/
+│       ├── cli.py               # Typer 入口：默认 REPL + research config
+│       ├── chat/                # 对话 shell（M2.5）
 │       │   ├── __init__.py
-│       │   ├── base.py          # Agent 基类
-│       │   ├── orchestrator.py
+│       │   ├── session.py       # ChatSession（状态与后端句柄）
+│       │   ├── router.py        # slash 分发 + LLM agent loop
+│       │   └── tools.py         # SLASH_COMMANDS + LLM_TOOLS 注册
+│       ├── cli_services.py      # run_read / run_discuss 等可复用纯函数
+│       ├── cli_ideas.py         # run_ideas_list/show/update 可复用纯函数
+│       ├── config.py            # Pydantic Settings 配置
+│       ├── core/
+│       │   ├── llm.py           # LLMProvider, ChatMessage, ToolCall, ChatResponse
+│       │   ├── language.py      # 回复语言 en/zh 与 prompt 注入
+│       │   ├── paper.py         # 论文实体
+│       │   ├── paper_resolver.py# 搜索 + 加载 + 交互式选择
+│       │   ├── debate_prompts.py# 辩论用户提示模板
+│       │   └── idea.py          # Idea 实体
+│       ├── agents/
+│       │   ├── base.py          # Agent 基类（支持 prompt_stem 切换）
+│       │   ├── orchestrator.py  # analyze_paper / debate_round / followup_turn
 │       │   ├── analyst.py
 │       │   ├── critic.py
-│       │   ├── searcher.py
-│       │   ├── scribe.py
-│       │   └── memory_keeper.py
-│       ├── core/
-│       │   ├── llm.py           # DeepSeek API 客户端封装
-│       │   ├── paper.py         # 论文实体与解析
-│       │   └── idea.py          # Idea 实体
+│       │   ├── debate.py        # DebateResult, FollowUpResult, DebateHistory
+│       │   ├── memory_keeper.py
+│       │   ├── searcher.py      # M3+ 占位
+│       │   └── scribe.py        # M4+ 占位
+│       ├── memory/
+│       │   └── working_memory.py
 │       ├── storage/
-│       │   ├── database.py      # SQLite 操作
-│       │   └── vector_store.py  # ChromaDB 操作
+│       │   ├── database.py      # SQLite + migrations
+│       │   ├── discussions.py
+│       │   ├── ideas.py
+│       │   └── vector_store.py  # ChromaDB（含 keyword fallback）
 │       ├── search/
-│       │   ├── arxiv.py         # arXiv API
-│       │   ├── semantic_scholar.py
-│       │   └── github.py        # 代码搜索
+│       │   └── arxiv_search.py
 │       ├── parsers/
-│       │   └── pdf.py           # PyMuPDF 解析
+│       │   └── pdf.py
 │       └── ui/
-│           └── tui.py           # Textual TUI
+│           └── formatting.py    # Rich 渲染（read_report / debate / paper_header / followup）
 ├── tests/
 │   ├── unit/
 │   ├── integration/
@@ -275,10 +331,10 @@ research-bot/
 ### 7.1 论文分析流
 
 ```
-用户: research read arxiv:2301.12345
+用户: research → You> /read arxiv:2301.12345        (或自然语言触发 load_paper 工具)
   │
   ▼
-CLI → Orchestrator.route("read_paper")
+chat.router → tools.cmd_read / exec_load_paper → Orchestrator
   │
   ├── Paper Context
   │     ├── Fetcher.download(arxiv_id)  → PDF
@@ -296,10 +352,11 @@ CLI → Orchestrator.route("read_paper")
 ### 7.2 Idea 讨论流
 
 ```
-用户: research discuss "把 A 和 B 结合起来"
+用户: research → /read 锚定论文 → You> /discuss "把 A 和 B 结合起来"
+                                (或自然语言触发 discuss_idea 工具)
   │
   ▼
-Orchestrator.route("discuss_idea")
+chat.router → tools.cmd_discuss / exec_discuss_idea → Orchestrator
   │
   ├── MemoryKeeper.recall(related_history)  → 历史关联
   │
