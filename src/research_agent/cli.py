@@ -278,6 +278,15 @@ def write_command(
         "-o",
         help="Optional Markdown file to persist all drafts to.",
     ),
+    check_against: list[str] = typer.Option(
+        None,
+        "--check-against",
+        help=(
+            "Path to an existing draft file the Scribe should stay "
+            "consistent with (no duplication, no contradiction). "
+            "Repeatable - pass once per file."
+        ),
+    ),
     sequential: bool = typer.Option(
         False,
         "--sequential",
@@ -290,14 +299,21 @@ def write_command(
     ``~/.research-agent/style/fingerprint.json``. If no fingerprint is
     available the Scribe falls back to generic academic prose and
     says so in each draft's style note.
+
+    With ``--context`` the Scribe also auto-pulls related ideas and
+    recent discussion excerpts from your memory store. With
+    ``--check-against`` it sees the body of an existing draft and is
+    told not to duplicate or contradict it.
     """
     cfg = _ensure_api_key()
     out_path = Path(output).expanduser() if output.strip() else None
+    check_paths = [Path(p).expanduser() for p in (check_against or []) if p and p.strip()]
     run_write(
         cfg,
         console,
         section=section,
         context=context,
+        check_against=check_paths,
         target_words=target_words,
         versions=versions,
         output=out_path,

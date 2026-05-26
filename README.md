@@ -261,6 +261,32 @@ mimics it (sentence length, transitions, hedging vs confidence
 balance, citation format). Without a fingerprint it falls back to
 neutral academic prose and says so in each draft's style note.
 
+#### Context-aware writing
+
+When you pass `--context "<description>"`, the Scribe doesn't just
+parrot the description — it also pulls related material from your
+memory store and injects it into the prompt:
+
+- **Related ideas** from your library (semantic similarity ≥ 0.5,
+  top 3) — title, status, last critic score, summary.
+- **Recent cross-session discussion excerpts** that look topically
+  relevant (top 3).
+- **Existing drafts** you point it at with `--check-against PATH`
+  (repeatable) — body included verbatim (truncated to ~2 KB each)
+  with an explicit instruction not to duplicate or contradict.
+
+```bash
+research write conclusion \
+  --context "sparse top-k attention for 32k contexts" \
+  --check-against drafts/intro.md \
+  --check-against drafts/method.md \
+  --versions 3
+```
+
+The CLI prints a one-line `Scribe context: user context, 2 related
+idea(s), 1 discussion excerpt(s), 2 draft(s) to stay consistent
+with` summary before the panels so you can see what the agent saw.
+
 ## Development
 
 ```bash

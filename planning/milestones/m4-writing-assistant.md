@@ -112,7 +112,7 @@
   `style_note` 字段里自报。22 unit tests 覆盖 dispatch、解析、
   fingerprint 注入、降级、CLI 输出文件。
 
-### Story S4.2.2 — 上下文感知写作
+### Story S4.2.2 — 上下文感知写作 [x] COMPLETED
 
 **验收条件**:
 - 写作时可提供研究上下文：`research write introduction --context "这篇论文研究..."`
@@ -120,9 +120,23 @@
 - 生成内容与用户已有内容保持一致（避免重复或矛盾）
 
 **Tasks**:
-- [ ] T4.2.2.1 实现上下文构建：从 MemoryKeeper 检索相关材料
-- [ ] T4.2.2.2 实现一致性检查：检测与已有草稿的矛盾
-- [ ] T4.2.2.3 实现 `--context` 参数：接受自然语言描述
+- [x] T4.2.2.1 实现上下文构建：从 MemoryKeeper 检索相关材料 —
+  `cli_write._build_writing_context` 在 `--context` 文本非空时
+  调用 `MemoryKeeper.check_associations`（threshold=0.5、无状态
+  过滤，取前 3 个 idea）+ `recall_history`（取前 3 条跨 session
+  discussion），并将所有错误降级为空槽位以保护写作流程。
+- [x] T4.2.2.2 实现一致性检查：检测与已有草稿的矛盾 —
+  `--check-against PATH`（可重复）参数读取已有草稿正文，
+  在 prompt 里以 `[EXISTING DRAFTS TO STAY CONSISTENT WITH —
+  do not contradict, do not duplicate verbatim]` 段落注入；
+  单文件截断 2 KB，避免 LLM 上下文溢出。
+- [x] T4.2.2.3 实现 `--context` 参数：接受自然语言描述 —
+  CLI 已在 S4.2.1 接入；本 story 把它从「dump 给 LLM」
+  升级为「先用作 memory recall 的 query、再合成结构化
+  context blob」。`WritingContext.render` 用清晰段头
+  （USER CONTEXT / RELATED IDEAS / RECENT DISCUSSION EXCERPTS /
+  EXISTING DRAFTS）让 LLM 容易解析。10 unit tests 覆盖 render
+  empty / full、truncation、memory 错误吞咽、`run_write` 端到端。
 
 ---
 
