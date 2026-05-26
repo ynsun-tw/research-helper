@@ -57,8 +57,9 @@ After any of the above, `research --help` should list the writing
 suite (`write`, `review`, `check`, `style`) alongside `config` and
 `insights`, and the conversational REPL is one `research` away.
 
-> Latest published build: **0.4.0** (M4 writing assistant) on Test
-> PyPI — [project page](https://test.pypi.org/project/paper-research-agent/0.4.0/).
+> Latest published build: **0.5.0** (M5 polish — figure generation,
+> doctor, performance, CI, packaging) on Test PyPI —
+> [project page](https://test.pypi.org/project/paper-research-agent/0.5.0/).
 
 ## Configure
 
