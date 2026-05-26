@@ -83,6 +83,29 @@
 - **原因**: 单 key 切换多模型；与 OpenAI SDK 兼容；`sk-or-` key 与 `provider/model` slug 对齐
 - **实现**: `base_url` 默认 `https://openrouter.ai/api/v1`；`api_key` 与 `base_url` 不一致时自动迁移
 
+### ADR-007: Agent JSON 解析迁移到 Pydantic v2 schemas（Post-M5）
+- **状态**: 已决定（2026-05）
+- **触发**: 全部 6 个 agent（Analyst / Critic / Scribe / Searcher / Illustrator / writing_pipeline）都靠 `agents/base.py::extract_json` + `data.get(key, default)` 解析 LLM JSON，分散在 11 个 `_parse_*` 函数里，每个都自带一份 `_as_str_list` + 区间 clamp 的样板代码。类型上拿到的是裸 `dict[str, Any]`，下游无法约束。
+- **决策**: 引入 `research_agent/agents/schemas.py`，所有 LLM JSON 回复用 Pydantic v2 模型 + 单一入口 `parse_model(raw, Model)` 解析。
+- **选型权衡**: 评估了 (A) `pydantic-ai` 全框架 / (B) 仅 Pydantic v2 校验 / (C) Pydantic + 原生 structured outputs 三条路线，选 B：零新框架、零和 `LLMProvider` 抢地盘、不动 `chat/router.py`、`MockLLMProvider` 测试模式不变、CLI 启动时间不退化（`pydantic` 通过 `pydantic-settings` 早已是传递依赖）。C 留作后续可选启用路径，A 因违反 local-first + 最小依赖约束被否决。
+- **实现要点**:
+  - `schemas.py` 提供 10 个模型：`AnalysisPayload` / `IdeaSupportPayload` / `ConclusionPayload` / `CritiquePayload` / `WritingReviewPayload` / `DraftPayload` / `SearcherScoreItem` + `SearcherScoresPayload` / `SearcherRefinementPayload` / `FigurePayload` / `ClaimEvidencePayload`
+  - 全部 schema 统一约定：`extra="ignore"` + 全字段默认 + `mode="before"` `field_validator` 做容错 coerce（错型列表 → `list[str]`、`confidence` clamp 到 [0,1]、Critic `support_score` clamp 到 [1,9] 不允许 10）
+  - `parse_model` 把 `ValidationError`（Pydantic v2 中本身就是 `ValueError` 子类）和 JSON decode 错误统一抛 `ValueError`，agent 里既有的 `except ValueError` 优雅降级路径零改动
+  - Critic 保留 free-text "Rating: 7/10" 正则兜底：用 `_score_key_present()` 探测 JSON 信封里是否带 score 字段，没有才走老的 `parse_support_score` 正则路径
+  - `extract_json` 从 `agents/base.py` 删除；唯一的"裸 JSON 信封"访问点是新公开的 `schemas.strip_to_json()`
+  - `pydantic>=2.7` 提升为 `pyproject.toml` 直接依赖
+- **影响**:
+  - 下游拿到的是带类型的 Pydantic 实例而不是 `dict[str, Any]`，IDE 补全 / mypy / 字段约束全部生效
+  - 字段范围校验（`support_score ∈ [1,9]`、`confidence ∈ [0,1]`）从每个 agent 收敛到一个 schema 文件，DRY
+  - 11 个 `_as_str_list` / 内联 clamp 样板被消掉
+  - 新增 21 个 contract 测试（`tests/unit/test_agent_schemas.py`）锁定容错语义（垃圾 JSON → ValueError、缺字段默认、错型 coerce、范围 clamp、`assumption/basis` ↔ `claim/evidence` 别名）
+- **代价/风险**:
+  - 增加一个直接依赖 `pydantic>=2.7`（实际零成本：`pydantic-settings` 早已传递引入）
+  - Pydantic v3 升级时需要回看 `field_validator(mode="before")` API 是否保持兼容
+- **未做**: LangGraph 编排写作流水线、OpenTelemetry 可观测性 — 这两条建议作为后续可选改进保留，不在本次范围。
+- **后续可选演进**: 当主用模型（DeepSeek 等）稳定支持 OpenAI 风格 `response_format={"type": "json_schema"}` 时，可在 `LLMProvider.chat` 加 opt-in 参数走原生 structured outputs，schema 本身不需要改 — 这是 ADR-007 设计时刻意留出的演进口子。
+
 ### ADR-006: CLI 改为对话式 REPL（M2.5）
 - **状态**: 已决定（2026-05）
 - **触发**: 多子命令工具（`research read` / `discuss -p ...` / `ideas ...`）每条命令独立完成一次任务后退出，与"研究合作研究员"的对话定位不符；论文锚定/idea 状态/记忆等会话状态在子命令之间没有自然承载。

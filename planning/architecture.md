@@ -296,6 +296,7 @@ research-bot/
 │       │   └── idea.py          # Idea 实体
 │       ├── agents/
 │       │   ├── base.py          # Agent 基类（支持 prompt_stem 切换）
+│       │   ├── schemas.py       # Pydantic v2 LLM-output 模型 + parse_model（ADR-007）
 │       │   ├── orchestrator.py  # analyze_paper / debate_round / followup_turn
 │       │   ├── analyst.py
 │       │   ├── critic.py

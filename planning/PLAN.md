@@ -44,6 +44,18 @@
 
 ---
 
+## Post-M5 跨切重构
+
+完成所有里程碑后落地的、不归属任何 epic 的横向改进。每条都附 ADR。
+
+| ID | 标题 | 日期 | 状态 | 详情 |
+|----|------|------|------|------|
+| R-001 | Agent JSON 解析迁移到 Pydantic v2 schemas | 2026-05 | DONE | [notes.md](notes.md) ADR-007 |
+
+R-001 摘要：6 个 agent 的 11 个 `extract_json` 调用点全部迁移到 `research_agent/agents/schemas.py` 的 Pydantic v2 模型 + 单一入口 `parse_model(raw, Model)`。`agents/base.py::extract_json` 删除；`pydantic>=2.7` 升为直接依赖；新增 21 个 contract 测试锁定容错语义；CLI 启动时间与覆盖率不变。
+
+---
+
 ## 参考文档
 
 - [架构设计](architecture.md) — 系统架构、技术栈、数据流
