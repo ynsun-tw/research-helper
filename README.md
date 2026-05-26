@@ -349,6 +349,28 @@ The flow is:
 5. `research style update` → folds those accepted revisions back
    into the fingerprint as v2, v3, …
 
+### Self-plagiarism check
+
+```bash
+research check drafts/intro.md --threshold 0.4 --output reports/intro.similarity.md
+```
+
+`research check <file>` scans each paragraph of the draft against
+every paragraph in your `style_samples` corpus using paragraph-level
+**TF-IDF + cosine similarity** (pure Python, no heavy dependencies).
+The default threshold is 0.4 (per the M4 milestone); raise it for a
+stricter scan or lower it to surface light echoes.
+
+The console renders one panel summary plus a Markdown report:
+
+- For every flagged paragraph: the draft text, the matching corpus
+  paragraph (with `arxiv:<id>` source label), the similarity %, and
+  concrete rewrite suggestions that scale with severity (≥ 0.7 →
+  "rewrite from scratch", ≥ 0.5 → "paraphrase and cite", ≥ 0.4 →
+  "trim or merge").
+- Exit code is `0` for a clean check and `2` when at least one match
+  trips the threshold, so it slots cleanly into CI.
+
 ## Development
 
 ```bash

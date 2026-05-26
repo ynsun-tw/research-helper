@@ -20,6 +20,7 @@ from rich.table import Table
 
 from research_agent.agents.meta_memory import MetaMemory
 from research_agent.chat import run_chat
+from research_agent.cli_check import run_check
 from research_agent.cli_review import run_review
 from research_agent.cli_style import (
     run_style_fingerprint,
@@ -33,6 +34,7 @@ from research_agent.config import Config, ConfigError
 from research_agent.core.language import language_label
 from research_agent.core.llm import LLMClient
 from research_agent.storage.database import Database
+from research_agent.style.plagiarism import DEFAULT_THRESHOLD
 
 app = typer.Typer(
     name="research",
@@ -322,6 +324,56 @@ def write_command(
         output=out_path,
         parallel=not sequential,
     )
+
+
+@app.command("check")
+def check_command(
+    draft_file: str = typer.Argument(
+        ...,
+        help="Path to a Markdown / text file containing the draft to check.",
+    ),
+    threshold: float = typer.Option(
+        DEFAULT_THRESHOLD,
+        "--threshold",
+        "-t",
+        help=(
+            "Similarity threshold in (0, 1]. Paragraphs with cosine "
+            "similarity >= this value against any corpus paragraph "
+            "will be flagged. Default 0.4 per the M4 milestone."
+        ),
+    ),
+    output: str = typer.Option(
+        "",
+        "--output",
+        "-o",
+        help="Optional Markdown file to persist the similarity report to.",
+    ),
+) -> None:
+    """Self-plagiarism scan: compare a draft against your own corpus.
+
+    Compares each paragraph of the input file against every
+    paragraph in the ``style_samples`` table (your published work,
+    loaded via ``research style train``). Uses paragraph-level
+    TF-IDF + cosine similarity. Flags every paragraph whose best
+    match crosses the threshold and emits concrete rewrite
+    suggestions per match.
+    """
+    cfg = _load_config()
+    path = Path(draft_file).expanduser()
+    if not path.exists():
+        console.print(f"[red]Error:[/red] {path} does not exist.")
+        raise typer.Exit(code=1)
+    if not 0.0 < threshold <= 1.0:
+        console.print(
+            f"[red]Error:[/red] --threshold must be in (0, 1]; got {threshold}"
+        )
+        raise typer.Exit(code=1)
+    out_path = Path(output).expanduser() if output.strip() else None
+    result = run_check(
+        cfg, console, draft_path=path, threshold=threshold, output=out_path
+    )
+    if not result.report.is_clean:
+        raise typer.Exit(code=2)
 
 
 @app.command("review")

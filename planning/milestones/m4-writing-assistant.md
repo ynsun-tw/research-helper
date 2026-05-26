@@ -1,4 +1,4 @@
-> Status: IN PROGRESS
+> Status: COMPLETE
 > Index: [../../PLAN.md](../../PLAN.md)
 
 # M4 — 论文写作助手
@@ -220,7 +220,7 @@
 
 > 价值假设：自动检测避免研究者无意中复用过多已发表内容
 
-### Story S4.4.1 — 相似度检测
+### Story S4.4.1 — 相似度检测 [x] COMPLETED
 
 **验收条件**:
 - 生成内容与用户已发表论文进行相似度比对
@@ -228,7 +228,26 @@
 - 标注具体的重叠段落，建议改写方向
 
 **Tasks**:
-- [ ] T4.4.1.1 实现 `PlagiarismDetector.check(draft, published_papers) → SimilarityReport`
-- [ ] T4.4.1.2 实现段落级相似度（TF-IDF + 向量余弦相似度）
-- [ ] T4.4.1.3 实现警告展示：高亮重叠段落 + 改写建议
-- [ ] T4.4.1.4 集成测试：用户论文的某段落故意复用，验证能被检测
+- [x] T4.4.1.1 实现 `PlagiarismDetector.check(draft, published_papers) → SimilarityReport` —
+  `style/plagiarism.py` 的 `PlagiarismDetector`，accepts
+  `draft_paragraphs: list[str]` 和 `corpus_paragraphs:
+  list[tuple[paper_id, paragraph]]`，每段 draft 只保留最好的
+  corpus 匹配，按相似度降序排序。
+- [x] T4.4.1.2 实现段落级相似度（TF-IDF + 向量余弦相似度）—
+  纯 Python 实现：`tokenize`（小写、丢弃 ≤2 字符 token、纯数字
+  token），`_tfidf_vectors`（sublinear TF + smoothed IDF），
+  `_cosine`（短 dict 先迭代点积、L2 范数 lazy 计算）。零新依赖。
+- [x] T4.4.1.3 实现警告展示：高亮重叠段落 + 改写建议 —
+  `SimilarityReport.to_markdown` 输出 Markdown，包含每个匹配的
+  draft / source 段落和按相似度分级的 `suggest_rewrites`
+  （≥0.7: "rewrite from scratch"，≥0.5: paraphrase + cite，
+  ≥0.4: trim/cite）。CLI 用 Rich Panel + Markdown 渲染，命中阈
+  值时 exit code = 2，便于 CI 集成。
+- [x] T4.4.1.4 集成测试：用户论文的某段落故意复用，验证能被检测 —
+  `tests/unit/test_cli_check.py::test_run_check_detects_verbatim_reuse`：
+  通过 monkeypatched `load_paper` 训练一段语料，再让 draft
+  逐字复用其中一段，断言报告里出现 >0.9 的命中。共 23 unit
+  tests 覆盖 tokenize / paragraph split / cosine / tfidf /
+  threshold validation / empty corpus or draft / sort order /
+  one-match-per-draft / suggestion scaling / markdown / CLI
+  写盘 / 阈值控制。
