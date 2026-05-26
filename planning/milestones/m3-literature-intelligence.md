@@ -162,9 +162,9 @@
 
 **Tasks**:
 - [x] T3.4.1.1 实现 `MemoryKeeper.check_associations(context, threshold=0.8, limit=5, statuses=("shelved","waiting"))` 返回 `Association(idea, similarity)`；over-fetch 3× 然后按 threshold + status 过滤；orphan vector 行（SQL 行已删）自动跳过；空 context 返回 []。配套 `IdeaVectorStore.query_with_scores` 把 Chroma cosine distance / Jaccard 都统一映射到 `[0,1]` 区间。`format_associations` 生成简洁 Rich 提示行（一条 idea 一行，含相似度 % + 状态 + `/idea show <prefix>` 跳转）。15 个单测 + 3 个 vector store 契约测试，见 `tests/unit/test_memory_keeper.py`。
-- [ ] T3.4.1.2 实现提醒注入：Orchestrator 在输出前检查并附加提醒
-- [ ] T3.4.1.3 实现相似度阈值配置（`config set memory.alert_threshold 0.8`）
-- [ ] T3.4.1.4 集成测试：构造历史 Idea + 相关新讨论，验证提醒触发
+- [x] T3.4.1.2 实现提醒注入：`chat/tools._surface_parked_idea_alerts(session, paper)` 在 `/read` 完成 Analyst+Critic 渲染后立即调用 `MemoryKeeper.check_associations(paper.title+abstract)`，把命中的 shelved/waiting idea 渲染成简洁 Rich banner（一行一条，含相似度% + 状态 + `/idea show <prefix>` 快捷方式），同时把摘要塞进 working memory 让 LLM 后续也能看见。任何失败 swallowed（不打断 /read）；空 title+abstract 直接 short-circuit。8 个单测见 `tests/unit/test_chat_alert_injection.py`。
+- [x] T3.4.1.3 阈值配置：`Config.alert_threshold: float = 0.8`（pydantic 校验 + clamp 到 [0,1]），存 YAML，`research config set alert_threshold 0.85` CLI 入口，`config show` 显示当前值。非数字/越界拒绝并给出可读 error。4 个 CLI 单测 + 集成里实际 round-trip 阈值。
+- [x] T3.4.1.4 集成测试：`tests/integration/test_parked_idea_alerts.py` 真跑 `/read` (`_load_and_analyze`) 流程：构造一篇与 shelved idea 主题重叠的论文 + 一个不相关的 idea（gardening），验证 banner 命中前者、忽略后者；阈值调高时不触发；空库 silent；banner 包含 `/idea show <prefix>` 快捷方式。Jaccard fallback (`use_chroma=False`)，跑时 ~0.3s。
 
 ### Story S3.4.2 — 搁置 Idea 激活提醒
 

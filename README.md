@@ -84,6 +84,14 @@ control or **plain text** to let the LLM pick the right tool.
 | `/help` | List every slash command |
 | `/exit` | Persist + flush vector indexes + quit |
 
+After every `/read`, Research Agent quietly checks your `shelved` /
+`waiting` ideas; if the paper looks topically related (cosine
+similarity ≥ `alert_threshold`, default `0.8`), it prints a
+one-line banner with `/idea show <prefix>` shortcuts so you can
+revisit context you parked earlier. Tune the trigger via
+`research config set alert_threshold 0.85` (range `[0.0, 1.0]`;
+lower = more reminders, higher = fewer false positives).
+
 ### Natural language → tools
 
 Plain text is sent to the LLM, which has function-calling access to the

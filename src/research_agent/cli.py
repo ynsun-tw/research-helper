@@ -66,7 +66,10 @@ def _root(ctx: typer.Context) -> None:
 def config_set(
     key: str = typer.Argument(
         ...,
-        help="Config key (api_key, model, language, base_url, app_title, app_url, data_dir)",
+        help=(
+            "Config key (api_key, model, language, base_url, app_title, "
+            "app_url, data_dir, alert_threshold)"
+        ),
     ),
     value: str = typer.Argument(..., help="Value to set"),
 ) -> None:
@@ -107,6 +110,7 @@ def config_show() -> None:
     table.add_row("app_title", cfg.app_title)
     table.add_row("app_url", cfg.app_url)
     table.add_row("data_dir", str(cfg.data_dir))
+    table.add_row("alert_threshold", f"{cfg.alert_threshold:.2f}")
     table.add_row("config_path", str(cfg.config_path))
     console.print(table)
 

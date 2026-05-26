@@ -27,6 +27,7 @@ from research_agent.cli_services import _handle_debate_turn, _load_anchor_paper
 from research_agent.core.idea import IDEA_STATUSES, IdeaStatus
 from research_agent.core.llm import LLMError
 from research_agent.core.loader import PaperLoadError
+from research_agent.core.paper import Paper
 from research_agent.core.paper_resolver import parse_search_mode, search_arxiv_papers
 from research_agent.search.arxiv_search import ArxivSearchError, ArxivSearchHit
 from research_agent.search.semantic_scholar import SemanticScholarSearcher
@@ -1086,6 +1087,58 @@ def cmd_read(session: ChatSession, args: str) -> None:
         session.console.print(f"[dim]{result.splitlines()[0]}[/dim]")
 
 
+def _surface_parked_idea_alerts(session: ChatSession, paper: Paper) -> None:
+    """Print a one-line banner if the loaded paper looks related to any
+    shelved/waiting idea (M3 T3.4.1.2).
+
+    The banner is intentionally compact (one header line + one bullet
+    per alert, capped at 3) so it doesn't dominate the /read report.
+    Failures are swallowed (best-effort): if the vector store is
+    misconfigured or empty, the user shouldn't see an error mid-read.
+    """
+    try:
+        context = f"{paper.title}\n{paper.abstract}".strip()
+        if not context:
+            return
+        threshold = _alert_threshold(session)
+        associations = session.keeper.check_associations(
+            context, threshold=threshold, limit=3
+        )
+        if not associations:
+            return
+        banner = session.keeper.format_associations(associations)
+        if not banner:
+            return
+        session.console.print(banner)
+        # Drop a system message into working memory so the LLM can also
+        # see the alert if the user keeps chatting after /read.
+        title_list = ", ".join(a.idea.title for a in associations)
+        session.memory.append(
+            "system",
+            f"Related parked ideas surfaced for {paper.id}: {title_list}",
+        )
+    except Exception:
+        # Alerts are best-effort - any failure must NOT abort the read.
+        return
+
+
+def _alert_threshold(session: ChatSession) -> float:
+    """Resolve the association similarity threshold from Config.
+
+    Config carries the source-of-truth value (settable via
+    ``research config set alert_threshold 0.85``); the field is
+    pydantic-clamped to [0,1] on load so callers don't need to
+    re-validate. Falls back to the MemoryKeeper spec default if a
+    test injects a stub Config without the field.
+    """
+    from research_agent.agents.memory_keeper import DEFAULT_ASSOCIATION_THRESHOLD
+
+    cfg_value = getattr(session.cfg, "alert_threshold", None)
+    if isinstance(cfg_value, (int, float)):
+        return max(0.0, min(1.0, float(cfg_value)))
+    return DEFAULT_ASSOCIATION_THRESHOLD
+
+
 def _load_and_analyze(session: ChatSession, source: str) -> str | None:
     """Shared implementation for /read and load_paper LLM tool. Returns summary text."""
     try:
@@ -1118,6 +1171,7 @@ def _load_and_analyze(session: ChatSession, source: str) -> str | None:
         critic_notes=_critique_to_dict(report.critic),
     )
     render_read_report(session.console, paper, report)
+    _surface_parked_idea_alerts(session, paper)
     session.memory.append(
         "system",
         f"Loaded and analyzed paper: {paper.title} ({paper.id})",

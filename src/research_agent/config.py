@@ -20,8 +20,19 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_DEFAULT_MODEL = "deepseek/deepseek-chat"
 
 KNOWN_KEYS = frozenset(
-    {"api_key", "model", "base_url", "data_dir", "app_title", "app_url", "language"}
+    {
+        "api_key",
+        "model",
+        "base_url",
+        "data_dir",
+        "app_title",
+        "app_url",
+        "language",
+        "alert_threshold",
+    }
 )
+
+DEFAULT_ALERT_THRESHOLD = 0.8
 
 
 class ConfigError(Exception):
@@ -55,6 +66,11 @@ class Config(BaseModel):
     app_url: str = "https://github.com/research-agent"
     language: str = DEFAULT_LANGUAGE
     data_dir: Path = Field(default_factory=lambda: DEFAULT_DATA_DIR)
+    # Cosine similarity threshold for "this paper is related to a parked
+    # idea you might want to revisit" banners. M3 S3.4.1 spec: 0.8.
+    # Values must lie in [0.0, 1.0]; out-of-range YAML values are
+    # clamped silently rather than crashing config loading.
+    alert_threshold: float = DEFAULT_ALERT_THRESHOLD
 
     @field_validator("api_key", mode="before")
     @classmethod
@@ -79,6 +95,17 @@ class Config(BaseModel):
     @classmethod
     def _coerce_data_dir(cls, value: Any) -> Path:
         return Path(value) if value is not None else DEFAULT_DATA_DIR
+
+    @field_validator("alert_threshold", mode="before")
+    @classmethod
+    def _clamp_alert_threshold(cls, value: Any) -> float:
+        if value is None:
+            return DEFAULT_ALERT_THRESHOLD
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return DEFAULT_ALERT_THRESHOLD
+        return max(0.0, min(1.0, v))
 
     def ensure_openrouter_alignment(self) -> Config:
         """Fix base_url when key/model clearly target OpenRouter but URL does not."""
@@ -132,6 +159,7 @@ class Config(BaseModel):
             "app_url": self.app_url,
             "language": self.language,
             "data_dir": str(self.data_dir),
+            "alert_threshold": self.alert_threshold,
         }
         with self.config_path.open("w", encoding="utf-8") as f:
             yaml.safe_dump(payload, f, default_flow_style=False, allow_unicode=True)
@@ -166,6 +194,19 @@ class Config(BaseModel):
                 setattr(self, key, Path(value))
             elif key == "language":
                 setattr(self, key, normalize_language(value))
+            elif key == "alert_threshold":
+                try:
+                    fv = float(value)
+                except (TypeError, ValueError) as exc:
+                    raise ConfigError(
+                        "alert_threshold must be a number in [0.0, 1.0] "
+                        "(e.g. 0.8)"
+                    ) from exc
+                if not 0.0 <= fv <= 1.0:
+                    raise ConfigError(
+                        f"alert_threshold must be in [0.0, 1.0], got {fv}"
+                    )
+                setattr(self, key, fv)
             else:
                 setattr(self, key, value.strip() if isinstance(value, str) else value)
         except ValueError as exc:
