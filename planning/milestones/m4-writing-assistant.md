@@ -39,7 +39,7 @@
   新增 SQLite schema + `StyleSampleRepository`（bulk_add / 按 paper 计数 /
   按 paper 替换）。单元测试覆盖过滤、抽取、CRUD、CLI dispatch。
 
-### Story S4.1.2 — 风格指纹分析
+### Story S4.1.2 — 风格指纹分析 [x] COMPLETED
 
 **验收条件**:
 - 提取宏观层面指纹：摘要结构模式、Introduction 叙事弧线、Related Work 组织方式
@@ -48,11 +48,24 @@
 - 指纹存储为 `~/.research-agent/style/fingerprint.json`
 
 **Tasks**:
-- [ ] T4.1.2.1 实现 `StyleAnalyzer.analyze_macro(papers) → MacroFingerprint`（LLM 分析宏观模式）
-- [ ] T4.1.2.2 实现 `StyleAnalyzer.analyze_micro(papers) → MicroFingerprint`（统计分析：句长分布、词频）
-- [ ] T4.1.2.3 实现 `StyleAnalyzer.extract_markers(papers) → PersonalMarkers`（章节命名、引用格式）
-- [ ] T4.1.2.4 实现指纹序列化：写入 `fingerprint.json`
-- [ ] T4.1.2.5 单元测试：解析样本论文，验证指纹字段非空
+- [x] T4.1.2.1 实现 `StyleAnalyzer.analyze_macro(samples) → MacroFingerprint` —
+  按 section（Abstract / Introduction / Related Work / Other）分桶后，
+  统计 abstract & intro 最常见开头、相关工作组织策略
+  （chronological / thematic / comparison）、每篇平均 section 数。
+  当前为纯启发式实现；LLM augmentation 留给后续 story。
+- [x] T4.1.2.2 实现 `StyleAnalyzer.analyze_micro(samples) → MicroFingerprint` —
+  句长分布（mean / median / p10 / p90）、段落句数、过渡词
+  per-100-sentences rate、hedging / confidence / passive 频率、
+  type-token ratio。
+- [x] T4.1.2.3 实现 `StyleAnalyzer.extract_markers(samples) → PersonalMarkers` —
+  最常用 section title、引用格式（latex_cite / bracket_num /
+  author_year / mixed）、Figure vs Fig. / Table vs Tab.、em-dash 频率。
+- [x] T4.1.2.4 实现指纹序列化：`Fingerprint.save_to / load_from`，
+  默认路径 `~/.research-agent/style/fingerprint.json`，宽松
+  `from_dict` 容忍前后向不兼容字段。
+- [x] T4.1.2.5 单元测试：`tests/unit/test_style_fingerprint.py`、
+  `tests/unit/test_style_analyzer.py` 共 19 用例，覆盖 round-trip、
+  empty corpus、宏观/微观/markers 抽取、CLI dispatch。
 
 ### Story S4.1.3 — 风格指纹持续学习
 

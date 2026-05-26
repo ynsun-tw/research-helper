@@ -18,7 +18,11 @@ from rich.table import Table
 
 from research_agent.agents.meta_memory import MetaMemory
 from research_agent.chat import run_chat
-from research_agent.cli_style import run_style_show, run_style_train
+from research_agent.cli_style import (
+    run_style_fingerprint,
+    run_style_show,
+    run_style_train,
+)
 from research_agent.config import Config, ConfigError
 from research_agent.core.language import language_label
 from research_agent.core.llm import LLMClient
@@ -236,6 +240,21 @@ def style_show() -> None:
     """Print a summary of the current style training corpus."""
     cfg = _load_config()
     code = run_style_show(cfg, console)
+    raise typer.Exit(code=code)
+
+
+@style_app.command("fingerprint")
+def style_fingerprint() -> None:
+    """Build a style fingerprint from the imported samples.
+
+    Aggregates macro structure (section openers, related-work
+    organization), micro statistics (sentence-length distribution,
+    transition / hedging / confidence rates, type-token ratio), and
+    personal markers (citation format, figure ref style, em-dash
+    rate). Writes ``~/.research-agent/style/fingerprint.json``.
+    """
+    cfg = _load_config()
+    code = run_style_fingerprint(cfg, console)
     raise typer.Exit(code=code)
 
 

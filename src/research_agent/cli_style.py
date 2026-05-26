@@ -17,7 +17,9 @@ from rich.table import Table
 from research_agent.config import Config
 from research_agent.core.loader import PaperLoadError, load_paper
 from research_agent.storage.database import Database
+from research_agent.style.analyzer import StyleAnalyzer
 from research_agent.style.extractor import extract_samples
+from research_agent.style.fingerprint import Fingerprint
 from research_agent.style.samples import StyleSampleRepository
 
 
@@ -167,6 +169,93 @@ def run_style_show(cfg: Config, console: Console) -> int:
             table.add_row(paper_id, str(count))
         console.print(table)
         console.print(f"[bold]{total}[/bold] paragraphs across {len(by_paper)} paper(s)")
-        return 0
     finally:
         db.close()
+
+    fp_path = cfg.fingerprint_path
+    if fp_path.exists():
+        try:
+            fp = Fingerprint.load_from(fp_path)
+        except Exception as exc:
+            console.print(
+                f"[yellow]Fingerprint file present but unreadable:[/yellow] {exc}"
+            )
+            return 0
+        _render_fingerprint(console, fp, fp_path)
+    else:
+        console.print(
+            "[dim]No fingerprint yet. Run [bold]research style fingerprint[/bold] "
+            "after training.[/dim]"
+        )
+    return 0
+
+
+def run_style_fingerprint(cfg: Config, console: Console) -> int:
+    """Compute a :class:`Fingerprint` from the current corpus and persist it."""
+    db = Database(cfg.db_path)
+    try:
+        repo = StyleSampleRepository(db)
+        samples = repo.list_all()
+    finally:
+        db.close()
+    if not samples:
+        console.print(
+            "[yellow]No style samples found.[/yellow] "
+            "Run [bold]research style train[/bold] first."
+        )
+        return 1
+    fp = StyleAnalyzer().analyze(samples)
+    fp.save_to(cfg.fingerprint_path)
+    console.print(
+        f"[green]✓[/green] Fingerprint written to "
+        f"[bold]{cfg.fingerprint_path}[/bold]"
+    )
+    _render_fingerprint(console, fp, cfg.fingerprint_path)
+    return 0
+
+
+def _render_fingerprint(console: Console, fp: Fingerprint, path) -> None:  # type: ignore[no-untyped-def]
+    table = Table(title=f"Style fingerprint  ({path.name})", show_header=True)
+    table.add_column("Layer", style="cyan")
+    table.add_column("Key")
+    table.add_column("Value")
+    table.add_row("meta", "papers / samples", f"{fp.paper_count} / {fp.sample_count}")
+    table.add_row("meta", "created_at", fp.created_at or "—")
+    table.add_row("macro", "abstract opener", fp.macro.abstract_opener or "—")
+    table.add_row("macro", "abstract avg sents", f"{fp.macro.abstract_avg_sentences:.1f}")
+    table.add_row("macro", "intro opener", fp.macro.intro_opener or "—")
+    table.add_row("macro", "intro avg paragraphs", f"{fp.macro.intro_avg_paragraphs:.1f}")
+    table.add_row("macro", "related-work strategy", fp.macro.related_work_strategy or "—")
+    table.add_row("macro", "sections/paper avg", f"{fp.macro.section_count_avg:.1f}")
+    table.add_row("micro", "avg sentence length (words)", f"{fp.micro.avg_sentence_length:.1f}")
+    table.add_row("micro", "median sentence length", f"{fp.micro.median_sentence_length:.1f}")
+    table.add_row(
+        "micro",
+        "p10 / p90 sentence",
+        f"{fp.micro.p10_sentence_length:.1f} / {fp.micro.p90_sentence_length:.1f}",
+    )
+    table.add_row("micro", "avg paragraph (sents)", f"{fp.micro.avg_paragraph_length:.1f}")
+    table.add_row("micro", "hedging / 100 sents", f"{fp.micro.hedging_per_100:.1f}")
+    table.add_row("micro", "confidence / 100 sents", f"{fp.micro.confidence_per_100:.1f}")
+    table.add_row("micro", "passive / 100 sents", f"{fp.micro.passive_per_100:.1f}")
+    table.add_row("micro", "type-token ratio", f"{fp.micro.type_token_ratio:.3f}")
+    top_transitions = sorted(
+        fp.micro.transition_freq.items(), key=lambda kv: kv[1], reverse=True
+    )[:5]
+    if top_transitions:
+        table.add_row(
+            "micro",
+            "top transitions",
+            ", ".join(f"{w} ({v:.1f})" for w, v in top_transitions),
+        )
+    table.add_row("markers", "citation format", fp.markers.citation_format or "—")
+    table.add_row("markers", "figure refs", fp.markers.figure_ref_format or "—")
+    table.add_row("markers", "table refs", fp.markers.table_ref_format or "—")
+    table.add_row("markers", "em-dash / 100 sents", f"{fp.markers.em_dash_per_100:.1f}")
+    if fp.markers.top_section_titles:
+        table.add_row(
+            "markers",
+            "top section titles",
+            ", ".join(fp.markers.top_section_titles[:5]),
+        )
+    console.print(table)

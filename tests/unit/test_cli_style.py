@@ -13,10 +13,15 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from research_agent.cli import app
-from research_agent.cli_style import run_style_show, run_style_train
+from research_agent.cli_style import (
+    run_style_fingerprint,
+    run_style_show,
+    run_style_train,
+)
 from research_agent.config import Config
 from research_agent.core.paper import Paper, Section
 from research_agent.storage.database import Database
+from research_agent.style.fingerprint import Fingerprint
 from research_agent.style.samples import StyleSampleRepository
 
 runner = CliRunner()
@@ -178,3 +183,49 @@ def test_style_show_help() -> None:
     result = runner.invoke(app, ["style", "show", "--help"])
     assert result.exit_code == 0
     assert "summary" in result.stdout.lower()
+
+
+def test_style_fingerprint_requires_samples(config_dir: Path) -> None:
+    cfg = Config.load(config_dir)
+    code = run_style_fingerprint(cfg, Console())
+    assert code == 1
+    assert not cfg.fingerprint_path.exists()
+
+
+def test_style_fingerprint_writes_json(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+) -> None:
+    monkeypatch.setattr(
+        "research_agent.cli_style.load_paper",
+        lambda src, *, cache_dir: _fake_paper("arxiv:9999.9999", _PROSE_A + "\n\n" + _PROSE_B),
+    )
+    cfg = Config.load(config_dir)
+    run_style_train(cfg, Console(), sources=["arxiv:9999.9999"])
+    code = run_style_fingerprint(cfg, Console())
+    assert code == 0
+    assert cfg.fingerprint_path.exists()
+    fp = Fingerprint.load_from(cfg.fingerprint_path)
+    assert fp.sample_count == 2
+    assert fp.paper_count == 1
+    assert fp.micro.sentence_count > 0
+    assert fp.created_at  # non-empty timestamp
+
+
+def test_style_show_renders_fingerprint(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+) -> None:
+    monkeypatch.setattr(
+        "research_agent.cli_style.load_paper",
+        lambda src, *, cache_dir: _fake_paper("arxiv:9999.9999", _PROSE_A + "\n\n" + _PROSE_B),
+    )
+    cfg = Config.load(config_dir)
+    run_style_train(cfg, Console(), sources=["arxiv:9999.9999"])
+    run_style_fingerprint(cfg, Console())
+    # show should run without raising even when both corpus + fp exist
+    assert run_style_show(cfg, Console()) == 0
+
+
+def test_style_fingerprint_help() -> None:
+    result = runner.invoke(app, ["style", "fingerprint", "--help"])
+    assert result.exit_code == 0
+    assert "fingerprint" in result.stdout.lower()

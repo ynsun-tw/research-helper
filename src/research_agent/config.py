@@ -131,6 +131,15 @@ class Config(BaseModel):
     def chroma_dir(self) -> Path:
         return self.data_dir / "chroma"
 
+    @property
+    def style_dir(self) -> Path:
+        """Directory for style fingerprint JSON + (future) version history."""
+        return self.data_dir / "style"
+
+    @property
+    def fingerprint_path(self) -> Path:
+        return self.style_dir / "fingerprint.json"
+
     @classmethod
     def load(cls, data_dir: Path | None = None) -> Config:
         """Load config from disk, or return defaults if the file does not exist."""

@@ -215,6 +215,25 @@ single-sentence captions), and writes the survivors into the
 the same source replaces its prior samples by default; pass
 `--append` to accumulate instead.
 
+Once samples exist, build a **fingerprint** that captures how you
+write:
+
+```bash
+research style fingerprint
+```
+
+The fingerprint is computed entirely offline (no LLM call) and lands
+at `~/.research-agent/style/fingerprint.json`. It has three layers:
+
+| Layer | What it captures |
+|---|---|
+| **Macro** | abstract opener, intro opener, related-work organization (chronological / thematic / comparison), avg sections per paper |
+| **Micro** | sentence-length distribution (avg / median / p10 / p90), avg paragraph length, top transition words & their per-100-sentence rates, hedging / confidence / passive rates, type-token ratio |
+| **Markers** | dominant citation format (`latex_cite` / `bracket_num` / `author_year` / `mixed`), figure & table reference style (`Figure` vs `Fig.`), em-dash usage, your top section titles |
+
+`research style show` prints the corpus inventory and (if present)
+the fingerprint summary, side by side.
+
 ## Development
 
 ```bash

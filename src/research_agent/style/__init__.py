@@ -20,11 +20,23 @@ analysis, embedding queries) lives in ``agents/scribe.py`` and
 ``agents/style_analyzer.py`` (added in S4.1.2).
 """
 
+from research_agent.style.analyzer import StyleAnalyzer
 from research_agent.style.extractor import extract_samples
 from research_agent.style.filters import is_useful_paragraph
+from research_agent.style.fingerprint import (
+    Fingerprint,
+    MacroFingerprint,
+    MicroFingerprint,
+    PersonalMarkers,
+)
 from research_agent.style.samples import StyleSample, StyleSampleRepository
 
 __all__ = [
+    "Fingerprint",
+    "MacroFingerprint",
+    "MicroFingerprint",
+    "PersonalMarkers",
+    "StyleAnalyzer",
     "StyleSample",
     "StyleSampleRepository",
     "extract_samples",
