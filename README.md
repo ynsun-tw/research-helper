@@ -63,7 +63,7 @@ control or **plain text** to let the LLM pick the right tool.
 
 | Command | What it does |
 |---|---|
-| `/search <keywords>` | Paper search with LLM relevance scoring; primary source is arXiv with a Semantic Scholar fallback if arXiv rate-limits or errors. Sorted by score; flags papers already in your library |
+| `/search [--mode theoretical\|applied\|group:<author>] <keywords>` | Paper search with LLM relevance scoring; primary source is arXiv with a Semantic Scholar fallback if arXiv rate-limits or errors. Sorted by score; flags papers already in your library. Optional `--mode` biases the candidate set: `theoretical` (analysis / proofs), `applied` (benchmarks / experiments), or `group:"<author name>"` (quote multi-word names) |
 | `/history [N]` | Recent `/search` queries across sessions, with hit counts and read markers |
 | `/recall <query>` | Semantic search across **past** REPL discussions (cross-session) |
 | `/read <arxiv-id \| title \| path.pdf>` | Download + Analyst + Critic; sets the conversation anchor; auto-marks the queue entry done if present |

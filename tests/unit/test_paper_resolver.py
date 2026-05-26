@@ -9,7 +9,9 @@ from research_agent.core.paper_resolver import (
     _normalize_title,
     _strip_version,
     _titles_similar,
+    apply_search_mode,
     dedupe_hits,
+    parse_search_mode,
     search_arxiv_papers,
     select_arxiv_hit,
 )
@@ -287,6 +289,89 @@ def test_merge_sources_raises_when_both_fail() -> None:
     msg = str(exc_info.value)
     assert "arXiv" in msg
     assert "Semantic Scholar" in msg
+
+
+# ----------------------- search modes (T3.1.3.3) ---------------------
+
+
+def test_parse_search_mode_none_or_empty_returns_noop() -> None:
+    assert parse_search_mode(None).kind is None
+    assert parse_search_mode("").kind is None
+    assert parse_search_mode("   ").kind is None
+
+
+def test_parse_search_mode_recognises_theoretical_and_applied() -> None:
+    assert parse_search_mode("theoretical").kind == "theoretical"
+    assert parse_search_mode("THEORETICAL").kind == "theoretical"
+    assert parse_search_mode("  applied  ").kind == "applied"
+
+
+def test_parse_search_mode_recognises_group_with_author() -> None:
+    parsed = parse_search_mode("group:Andrej Karpathy")
+    assert parsed.kind == "group"
+    assert parsed.author == "Andrej Karpathy"
+
+
+def test_parse_search_mode_group_without_author_is_warning() -> None:
+    parsed = parse_search_mode("group:  ")
+    assert parsed.kind is None
+    assert "requires an author" in parsed.warning
+
+
+def test_parse_search_mode_unknown_emits_warning() -> None:
+    parsed = parse_search_mode("recreational")
+    assert parsed.kind is None
+    assert "Unknown" in parsed.warning
+    assert "theoretical" in parsed.warning  # lists valid modes
+
+
+def test_apply_search_mode_prepends_bias_for_theoretical() -> None:
+    result = apply_search_mode("attention transformer", "theoretical")
+    assert "theoretical" in result.lower()
+    assert "attention transformer" in result
+    # Bias prepended, not replacing user keywords.
+    assert result.endswith("attention transformer")
+
+
+def test_apply_search_mode_prepends_bias_for_applied() -> None:
+    result = apply_search_mode("attention transformer", "applied")
+    assert "empirical" in result.lower() or "benchmark" in result.lower()
+    assert "attention transformer" in result
+
+
+def test_apply_search_mode_prepends_author_for_group() -> None:
+    result = apply_search_mode("attention", "group:Andrej Karpathy")
+    assert "Andrej Karpathy" in result
+    assert "attention" in result
+
+
+def test_apply_search_mode_unknown_is_noop() -> None:
+    assert apply_search_mode("attention", "recreational") == "attention"
+
+
+def test_apply_search_mode_none_is_noop() -> None:
+    assert apply_search_mode("attention", None) == "attention"
+
+
+def test_search_papers_passes_mode_to_searcher() -> None:
+    """The mode bias must reach the underlying searcher as part of the query."""
+    arxiv = _StubSearcher([ArxivSearchHit("1706.03762", "x", "")])
+    search_arxiv_papers(
+        "attention transformer", searcher=arxiv, mode="theoretical"
+    )
+    assert arxiv.calls, "searcher was not called"
+    forwarded_query, _ = arxiv.calls[0]
+    assert "theoretical" in forwarded_query.lower()
+    assert "attention transformer" in forwarded_query
+
+
+def test_search_papers_mode_group_passes_author() -> None:
+    arxiv = _StubSearcher([ArxivSearchHit("1.1", "x", "")])
+    search_arxiv_papers(
+        "rnn", searcher=arxiv, mode="group:Yoshua Bengio"
+    )
+    forwarded_query, _ = arxiv.calls[0]
+    assert "Yoshua Bengio" in forwarded_query
 
 
 def test_merge_sources_caps_to_max_results() -> None:

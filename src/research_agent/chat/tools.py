@@ -11,6 +11,7 @@ that returns a text result for the LLM's next reasoning step).
 from __future__ import annotations
 
 import asyncio
+import shlex
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -26,7 +27,7 @@ from research_agent.cli_services import _handle_debate_turn, _load_anchor_paper
 from research_agent.core.idea import IDEA_STATUSES, IdeaStatus
 from research_agent.core.llm import LLMError
 from research_agent.core.loader import PaperLoadError
-from research_agent.core.paper_resolver import search_arxiv_papers
+from research_agent.core.paper_resolver import parse_search_mode, search_arxiv_papers
 from research_agent.search.arxiv_search import ArxivSearchError, ArxivSearchHit
 from research_agent.search.semantic_scholar import SemanticScholarSearcher
 from research_agent.storage.discussions import DiscussionMessage
@@ -117,38 +118,91 @@ def llm_tool_schemas() -> list[dict[str, Any]]:
 
 @slash(
     "search",
-    summary="Search arXiv + LLM relevance score (logs to history; flags already-read).",
-    usage="/search <keywords>",
+    summary=(
+        "Search arXiv + LLM relevance score (logs to history; flags already-read). "
+        "Add --mode theoretical|applied|group:<author> to bias the candidate set."
+    ),
+    usage="/search [--mode theoretical|applied|group:<author>] <keywords>",
 )
 def cmd_search(session: ChatSession, args: str) -> None:
     if not args:
+        session.console.print(
+            "[yellow]Usage:[/yellow] /search [--mode <m>] <keywords>"
+        )
+        return
+    mode, query = _extract_mode_flag(args)
+    if not query:
         session.console.print("[yellow]Usage:[/yellow] /search <keywords>")
         return
+    if mode is not None:
+        parsed = parse_search_mode(mode)
+        if parsed.warning:
+            session.console.print(f"[yellow]{parsed.warning}[/yellow]")
+        elif parsed.kind == "group":
+            session.console.print(
+                f"[dim]Biasing search toward author {parsed.author!r}.[/dim]"
+            )
+        elif parsed.kind is not None:
+            session.console.print(
+                f"[dim]Biasing search toward {parsed.kind} papers.[/dim]"
+            )
     try:
         with session.console.status("[bold]Searching arXiv…[/bold]"):
-            hits = search_arxiv_papers(args, max_results=5)
+            hits = search_arxiv_papers(query, max_results=5, mode=mode)
     except (PaperLoadError, ArxivSearchError) as exc:
         session.console.print(f"[red]Error:[/red] {exc}")
         return
     if not hits:
-        session.console.print(f"[yellow]No results for[/yellow] {args!r}.")
+        session.console.print(f"[yellow]No results for[/yellow] {query!r}.")
         session.searches.record(
-            args, hits, source="arxiv", session_id=session.memory.session_id
+            query, hits, source="arxiv", session_id=session.memory.session_id
         )
-        session.memory.append("system", _search_summary(args, hits))
+        session.memory.append("system", _search_summary(query, hits))
         return
 
-    scored = _score_hits(session, args, hits)
+    scored = _score_hits(session, query, hits)
     session.searches.record(
-        args, scored, source="arxiv", session_id=session.memory.session_id
+        query, scored, source="arxiv", session_id=session.memory.session_id
     )
     sorted_hits = _sort_by_score(scored)
     already_read = session.searches.already_read([h.arxiv_id for h in sorted_hits])
-    _render_search_hits(session, args, sorted_hits, already_read=already_read)
+    _render_search_hits(session, query, sorted_hits, already_read=already_read)
     session.memory.append(
         "system",
-        _search_summary(args, sorted_hits, already_read=already_read),
+        _search_summary(query, sorted_hits, already_read=already_read),
     )
+
+
+def _extract_mode_flag(args: str) -> tuple[str | None, str]:
+    """Parse ``--mode <value>`` out of a slash-command argument string.
+
+    Returns ``(mode, remaining_query)``. The mode can appear anywhere
+    in ``args``; supports ``--mode foo``, ``--mode=foo``, and quoted
+    multi-word values (``--mode "group:Andrej Karpathy"``). Uses
+    :func:`shlex.split` so quoting works the same way as a shell.
+    Falls back to whitespace split if the input has unbalanced quotes
+    (so the parser never aborts the user's search).
+    """
+    try:
+        tokens = shlex.split(args, posix=True)
+    except ValueError:
+        tokens = args.split()
+    mode: str | None = None
+    rest: list[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "--mode" and i + 1 < len(tokens):
+            mode = tokens[i + 1]
+            i += 2
+            continue
+        if tok.startswith("--mode="):
+            mode = tok[len("--mode="):]
+            i += 1
+            continue
+        rest.append(tok)
+        i += 1
+    return mode, " ".join(rest).strip()
 
 
 def _score_hits(
@@ -273,7 +327,10 @@ def _search_summary(
     _function_schema(
         "search_arxiv",
         "Search arXiv for papers matching a keyword query. Returns a list of "
-        "candidate papers (id, title, year) but does not load them.",
+        "candidate papers (id, title, year) but does not load them. Optional "
+        "mode biases the candidate set: 'theoretical' (analysis / proofs), "
+        "'applied' (benchmarks / experiments), 'group:<author-name>' "
+        "(papers by a specific author).",
         {
             "query": {"type": "string", "description": "Keywords or title fragments."},
             "max_results": {
@@ -281,6 +338,13 @@ def _search_summary(
                 "description": "How many results to return (default 5, max 10).",
                 "minimum": 1,
                 "maximum": 10,
+            },
+            "mode": {
+                "type": "string",
+                "description": (
+                    "Optional search bias. One of: 'theoretical', 'applied', "
+                    "'group:<author-name>'. Unknown values are ignored."
+                ),
             },
         },
         required=["query"],
@@ -292,9 +356,15 @@ def exec_search_arxiv(session: ChatSession, args: dict[str, Any]) -> str:
         return "Error: query is required."
     max_results = int(args.get("max_results", 5))
     max_results = max(1, min(max_results, 10))
+    mode_raw = args.get("mode")
+    mode = str(mode_raw).strip() if mode_raw else None
+    if mode:
+        parsed = parse_search_mode(mode)
+        if parsed.warning:
+            return f"Error: {parsed.warning}"
     try:
         with session.console.status(f"[bold]Searching arXiv:[/bold] {query}…"):
-            hits = search_arxiv_papers(query, max_results=max_results)
+            hits = search_arxiv_papers(query, max_results=max_results, mode=mode)
     except (PaperLoadError, ArxivSearchError) as exc:
         return f"Error: {exc}"
     if not hits:

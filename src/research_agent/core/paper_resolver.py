@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -40,6 +41,7 @@ def search_arxiv_papers(
     max_results: int = 5,
     use_fallback: bool = True,
     merge_sources: bool = False,
+    mode: str | None = None,
 ) -> list[ArxivSearchHit]:
     """Search by title/keywords with arXiv primary, Semantic Scholar fallback.
 
@@ -61,17 +63,18 @@ def search_arxiv_papers(
         raise PaperLoadError(
             "Paper query is empty. Use --paper with an arXiv id, title, or PDF path."
         )
+    effective = apply_search_mode(stripped, mode)
     primary = searcher or ArxivSearcher()
     fallback = fallback_searcher or SemanticScholarSearcher()
 
     if merge_sources:
         return _merged_search(
-            stripped, primary, fallback, max_results=max_results
+            effective, primary, fallback, max_results=max_results
         )
 
     primary_err: ArxivSearchError | None = None
     try:
-        hits = primary.search(stripped, max_results=max_results)
+        hits = primary.search(effective, max_results=max_results)
         if hits:
             return hits
     except ArxivSearchError as exc:
@@ -83,7 +86,7 @@ def search_arxiv_papers(
         raise PaperLoadError(f"No arXiv papers found for: {stripped!r}")
 
     try:
-        fallback_hits = fallback.search(stripped, max_results=max_results)
+        fallback_hits = fallback.search(effective, max_results=max_results)
     except ArxivSearchError as fb_exc:
         msg = f"Semantic Scholar fallback also failed: {fb_exc}"
         if primary_err is not None:
@@ -127,6 +130,87 @@ def _merged_search(
             f"Merged search failed for {query!r}: " + "; ".join(errs)
         )
     raise PaperLoadError(f"No papers found for: {query!r} (tried arXiv + S2)")
+
+
+# --------------------------------------------------- search modes (T3.1.3.3)
+
+
+# Bias keywords prepended to a user's query for each mode. Both arXiv's
+# Atom API and Semantic Scholar's keyword search rank-boost terms that
+# appear in a paper's abstract / title; injecting these biases the
+# candidate set toward the user's intent before the LLM-driven Searcher
+# re-ranks the top hits. We keep the bias short (5-7 words) so the
+# user's own keywords still dominate the relevance signal.
+MODE_BIASES = {
+    "theoretical": "theoretical analysis convergence theorem proof",
+    "applied": "empirical evaluation benchmark application",
+}
+
+VALID_SEARCH_MODES = (
+    "theoretical",
+    "applied",
+    "group:<author-name>",
+)
+
+
+@dataclass(slots=True, frozen=True)
+class ParsedMode:
+    """Outcome of parsing a ``--mode`` value. ``warning`` is non-empty
+    when the input was unrecognised (caller decides whether to surface)."""
+
+    kind: str | None  # 'theoretical' | 'applied' | 'group' | None
+    author: str | None
+    warning: str = ""
+
+
+def parse_search_mode(mode: str | None) -> ParsedMode:
+    """Parse a raw ``--mode`` value into a structured ParsedMode.
+
+    Accepts ``"theoretical"``, ``"applied"``, ``"group:<author-name>"``;
+    case-insensitive; whitespace tolerated. Unknown modes return a
+    no-op with a ``warning`` so the slash handler can hint at the
+    user. ``None`` / empty -> ``ParsedMode(None, None)``.
+    """
+    if not mode:
+        return ParsedMode(kind=None, author=None)
+    token = mode.strip().lower()
+    if not token:
+        return ParsedMode(kind=None, author=None)
+    if token in MODE_BIASES:
+        return ParsedMode(kind=token, author=None)
+    if token.startswith("group:"):
+        author = mode.strip()[len("group:"):].strip()
+        if not author:
+            return ParsedMode(
+                kind=None,
+                author=None,
+                warning="--mode group:<author-name> requires an author name.",
+            )
+        return ParsedMode(kind="group", author=author)
+    return ParsedMode(
+        kind=None,
+        author=None,
+        warning=(
+            f"Unknown --mode {mode!r}. Valid modes: "
+            + ", ".join(VALID_SEARCH_MODES)
+        ),
+    )
+
+
+def apply_search_mode(query: str, mode: str | None) -> str:
+    """Augment ``query`` with mode-specific bias terms.
+
+    Unknown / empty modes return ``query`` unchanged. The author form
+    (``group:<name>``) prepends ``by <name>`` which both engines treat
+    as keyword tokens (arXiv's Atom ``all:`` and S2's search both
+    weight author names heavily).
+    """
+    parsed = parse_search_mode(mode)
+    if parsed.kind in MODE_BIASES:
+        return f"{MODE_BIASES[parsed.kind]} {query}"
+    if parsed.kind == "group" and parsed.author:
+        return f"by {parsed.author} {query}"
+    return query
 
 
 # ----------------------------------------------------- dedupe helpers (T3.1.2.3)

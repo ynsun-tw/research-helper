@@ -64,7 +64,7 @@
 **Tasks**:
 - [x] T3.1.3.1 Searcher system prompt（`prompts/searcher.yaml`，含 0-1 分数分档 + 诚实规则）
 - [x] T3.1.3.2 `Searcher.score_hits(query, hits) → list[ArxivSearchHit]` 批量给所有候选 LLM 评分，写到 `relevance_score` / `relevance_reason` 字段并按分数降序持久化（`/search` / `/history` / `recent_searches` 全部按相关度排序）
-- [ ] T3.1.3.3 搜索策略参数（`--mode theoretical/applied/group:<author>`）
+- [x] T3.1.3.3 搜索策略参数：`paper_resolver.parse_search_mode` + `apply_search_mode` 把 mode 翻译为查询前缀偏置（theoretical → "theoretical analysis convergence ..."，applied → "empirical evaluation benchmark ..."，group:<author> → "by <author> ..."）。`search_arxiv_papers` 接受 `mode` 参数；`/search [--mode <m>] <keywords>` slash 支持 shlex 引号解析（多词作者名 `--mode "group:Andrej Karpathy"`）；`search_arxiv` LLM 工具 schema 新增 `mode` 字段，未知 mode 返回 error 但不破坏现有调用。15 个单测覆盖 parse / apply / 不同 mode / 边界条件 / 引号解析 / unbalance fallback / LLM 工具 schema，见 `tests/unit/test_paper_resolver.py` + `tests/unit/test_search_modes_chat.py`。
 - [ ] T3.1.3.4 集成测试：对比 LLM 相关度评分与人工评分的一致性（单元层面已覆盖 clamp / parse / fallback / sort，见 `tests/unit/test_searcher.py`）
 
 ---
