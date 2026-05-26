@@ -130,6 +130,16 @@ mypy src
 pytest
 ```
 
+Live network tests (hit arXiv / Semantic Scholar) are skipped by
+default. To run them:
+
+```bash
+RUN_NETWORK_TESTS=1 pytest -m network
+```
+
+Skip them explicitly with `pytest -m 'not network'` (already the
+default via `RUN_NETWORK_TESTS` being unset).
+
 ## Planning
 
 See [planning/PLAN.md](planning/PLAN.md) and

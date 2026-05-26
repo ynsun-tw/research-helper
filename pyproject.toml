@@ -44,6 +44,9 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra --strict-markers"
 asyncio_mode = "auto"
+markers = [
+    "network: marks tests that hit live network services (deselect with -m 'not network'; enable with RUN_NETWORK_TESTS=1)",
+]
 
 [tool.ruff]
 target-version = "py311"

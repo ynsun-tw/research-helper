@@ -51,7 +51,7 @@
 - [x] T3.1.2.1 实现 `SemanticScholarSearcher`（Graph API `/paper/search`，复用 `ArxivSearchHit` 类型，hits 标 `source="semantic_scholar"`；带 3s 客户端节流 + 礼貌 User-Agent + 429/timeout 重试 + 可选 `x-api-key`）。`paper_resolver.search_arxiv_papers` 自动 arXiv 主源 → S2 fallback，UI 在 fallback 时给出黄色提示；`/read` 仍能用 S2 暴露的 `externalIds.ArXiv` 加载。测试见 `tests/unit/test_semantic_scholar.py` + `tests/unit/test_paper_resolver.py` 的 fallback 用例。
 - [x] T3.1.2.2 实现引用图查询：`SemanticScholarSearcher.get_citations(arxiv_id)` / `.get_references(arxiv_id)` 复用 `_request_bytes` 重试/节流；`/cites` `/refs` slash + `get_citations` `get_references` LLM 工具，默认从 anchor paper 推断 id，本地 PDF 没有 arXiv 映射时给出明确提示；详见 `tests/unit/test_chat_citations.py` + `tests/unit/test_semantic_scholar.py` 的 citation graph 用例。
 - [ ] T3.1.2.3 实现跨源去重：基于标题相似度合并结果
-- [ ] T3.1.2.4 集成测试：搜索已知论文，验证引用图数据完整性
+- [x] T3.1.2.4 集成测试：`tests/integration/test_citation_graph_live.py` 用 arXiv:1706.03762 (Attention Is All You Need) 验证 `search` / `get_citations` / `get_references` / pagination / search→references 往返一致性。所有 hit 必须有有效 arxiv id 格式 + 非空 title + `source="semantic_scholar"` 且无重复。默认 skip，靠 `RUN_NETWORK_TESTS=1` 开启；S2 临时 429/timeout 自动转 skip 而非 fail。已知限制：`get_citations` 对热门论文常返回空（S2 第一页全是无 arxiv 映射的期刊/会议论文，被现有 filter 砍掉），列为后续 UX 改进点（M3 之外）。
 
 ### Story S3.1.3 — Searcher Agent 封装
 
