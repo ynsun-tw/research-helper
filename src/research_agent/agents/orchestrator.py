@@ -249,6 +249,45 @@ class Orchestrator:
         )
 
 
+    def extract_search_context(
+        self,
+        memory: WorkingMemory,
+        *,
+        max_messages: int = 12,
+        max_chars: int = 3000,
+    ) -> str:
+        """Build a compact transcript snippet for ``Searcher.suggest_refinement``.
+
+        Keeps the most recent ``max_messages`` messages (any role) and
+        formats them ``role: content``, capped at ``max_chars``. The
+        Searcher prompt is responsible for *interpreting* this into a
+        refined query; the orchestrator just gives it well-shaped raw
+        material.
+
+        Returns an empty string when there's nothing useful (no messages
+        or all-empty content).
+        """
+        if not memory.messages:
+            return ""
+        recent = memory.messages[-max_messages:]
+        lines: list[str] = []
+        for msg in recent:
+            content = (msg.content or "").strip()
+            if not content:
+                continue
+            # Tighten very long messages; Searcher only needs gist.
+            if len(content) > 600:
+                content = content[:600].rstrip() + "…"
+            lines.append(f"{msg.role}: {content}")
+        if not lines:
+            return ""
+        text = "\n".join(lines)
+        if len(text) > max_chars:
+            # Keep the tail (most recent), not the head.
+            text = "…\n" + text[-max_chars:]
+        return text
+
+
 def _support_from_debate(prev: DebateResult) -> IdeaSupportResult:
     return IdeaSupportResult(
         supports=list(prev.supports),

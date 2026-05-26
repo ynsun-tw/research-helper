@@ -109,9 +109,9 @@
 - 搜索策略变化有说明理由
 
 **Tasks**:
-- [ ] T3.2.3.1 实现 Orchestrator 的搜索策略推导：从讨论历史中提取搜索意图
-- [ ] T3.2.3.2 实现 `Searcher.suggest_refinement(discussion_context) → SearchSuggestion`
-- [ ] T3.2.3.3 实现策略调整的 CLI 交互
+- [x] T3.2.3.1 `Orchestrator.extract_search_context(memory, *, max_messages=12, max_chars=3000)` 从 working memory 取最近 N 条消息（任意 role）格式化成 `role: content` 串，每条单消息超过 600 字符自动截断，总长度超过 max_chars 时保留尾部并加 `…\n` 标记前缀。空 memory / 全空内容返回 `""`，让 `/refine` 短路。6 个单测见 `tests/unit/test_searcher_refinement.py` 的 orchestrator 部分。
+- [x] T3.2.3.2 `Searcher.suggest_refinement(discussion_context, *, previous_query=None) → SearchSuggestion`：把上一次查询 + 讨论摘要塞进一个独立的 system prompt（要求 LLM 输出 `{query, mode, reason, confidence}` JSON）。`_parse_refinement` 校验 mode（仅放行 `theoretical` / `applied` / `group:<author>`；author 为空 → `mode=None`），把 confidence clamp 到 [0,1]，partial / garbage / 空 context 都返回 degenerate `SearchSuggestion(query="", ...)` 让调用方安全短路。8 个单测覆盖空 context / 完整 payload / 未知 mode / group mode 规范化 / 空作者拒绝 / confidence 越界 clamp / 非 JSON 输出 / 部分字段。
+- [x] T3.2.3.3 `/refine` slash + `suggest_search_refinement` LLM 工具：slash 先调 orchestrator helper 取 context，再调 Searcher，渲染建议 banner（`Suggested next search: ... (mode: ...) Reason: ... (confidence X%)`），随后通过 `session.input_fn` 走 accept (`y` 默认) / edit (`e <new>`) / skip (`s`) 三档输入循环；接受时调 `cmd_search`（自动拼出 `--mode <m>` 前缀，多词 group mode 自动加引号），EOF / Ctrl-C 静默 skip。`ChatSession.last_search_query` 字段记录上一次查询，让 refinement 能反思"我刚搜了 X，下一步搜什么"。CHAT_SYSTEM_PROMPT 同步增加 `suggest_search_refinement` 工具说明 + `/refine` slash 列表。14 个单测见 `tests/unit/test_chat_refine_slash.py`（空 context 静默 / 空建议 hint / accept 派发 / skip 不派发 / edit 走自定义 / edit 空回退 / EOF 视为 skip / system memory 写入 / LLM tool 无 context 报错 / LLM tool 返回 payload / LLM tool 空建议 / `_format_search_args` 单元）。
 
 ---
 

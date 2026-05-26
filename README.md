@@ -76,6 +76,7 @@ control or **plain text** to let the LLM pick the right tool.
 | `/queue done\|skip\|remove <id>` | Manual state transitions |
 | `/cites [arxiv-id]` | Papers that cite the anchor (or given) paper — forward references via Semantic Scholar |
 | `/refs [arxiv-id]` | Papers cited by the anchor (or given) paper — backward references via Semantic Scholar |
+| `/refine` | Ask Searcher to propose the **next** search query from your recent discussion (query + optional `--mode` + reason + confidence); interactively accept / edit / skip |
 | `/paper` | Summary of the current anchor paper |
 | `/idea save [title]` | Persist the active debate as a saved idea |
 | `/ideas` | List saved ideas with their latest critic score |

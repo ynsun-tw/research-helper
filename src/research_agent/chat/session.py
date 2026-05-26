@@ -55,6 +55,9 @@ class ChatSession:
     anchor_paper: Paper | None = None
     current_idea_id: str | None = None
     idea_seed: str = ""
+    # Last `/search` query (or LLM `search_arxiv` query) executed this
+    # session - used by `Searcher.suggest_refinement` to anchor pivots.
+    last_search_query: str = ""
     debate: DebateHistory = field(default_factory=DebateHistory)
     max_context_tokens: int = 8000
 

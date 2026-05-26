@@ -56,6 +56,14 @@ You have access to function-calling tools that operate on the user's local state
                                         (backward references). Use to trace
                                         intellectual lineage / "what does
                                         this build on?"
+  suggest_search_refinement()         - read the recent discussion and
+                                        propose the *next* search query
+                                        (with optional mode + reason).
+                                        Use when the user asks "what
+                                        should I search next?" or pivots
+                                        topic mid-conversation; then
+                                        chain into search_arxiv if they
+                                        accept.
 
 Rules:
 - When the user refers back to an earlier search ("that transformer paper
@@ -76,8 +84,9 @@ Rules:
   get_citations or get_references on the anchor paper's arxiv_id and
   surface a few high-signal hits; suggest /queue add for follow-ups.
 - The user can also invoke commands directly with slashes (/search, /history,
-  /recall, /read, /discuss, /queue, /cites, /refs, /paper, /idea, /ideas,
-  /help, /exit) - mention those when guidance is more useful than a tool call.
+  /recall, /read, /discuss, /queue, /cites, /refs, /refine, /paper, /idea,
+  /ideas, /help, /exit) - mention those when guidance is more useful than a
+  tool call.
 - Be concise. Mirror the user's language.
 """
 

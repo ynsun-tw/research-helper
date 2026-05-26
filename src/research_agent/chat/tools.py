@@ -21,6 +21,7 @@ from rich.table import Table
 from research_agent.agents.analyst import AnalysisResult
 from research_agent.agents.critic import CritiqueResult
 from research_agent.agents.debate import DebateHistory, DebateResult, FollowUpResult
+from research_agent.agents.searcher import SearchSuggestion
 from research_agent.chat.session import ChatSession
 from research_agent.cli_ideas import run_ideas_list, run_ideas_show, run_ideas_update
 from research_agent.cli_services import _handle_debate_turn, _load_anchor_paper
@@ -147,6 +148,7 @@ def cmd_search(session: ChatSession, args: str) -> None:
             session.console.print(
                 f"[dim]Biasing search toward {parsed.kind} papers.[/dim]"
             )
+    session.last_search_query = query
     try:
         with session.console.status("[bold]Searching arXiv…[/bold]"):
             hits = search_arxiv_papers(query, max_results=5, mode=mode)
@@ -364,6 +366,7 @@ def exec_search_arxiv(session: ChatSession, args: dict[str, Any]) -> str:
         parsed = parse_search_mode(mode)
         if parsed.warning:
             return f"Error: {parsed.warning}"
+    session.last_search_query = query
     try:
         with session.console.status(f"[bold]Searching arXiv:[/bold] {query}…"):
             hits = search_arxiv_papers(query, max_results=max_results, mode=mode)
@@ -490,6 +493,141 @@ def exec_recent_searches(session: ChatSession, args: dict[str, Any]) -> str:
         # Also render to the console so the user sees what the model is reading.
         _render_history(session, queries)
     return _history_summary_text(queries)
+
+
+# --------------------------------------------------------- dynamic refinement
+
+
+def _build_refinement_context(session: ChatSession) -> str:
+    """Pull a transcript snippet from working memory for the Searcher.
+
+    Returns ``""`` when there's nothing usable (slash refuses to make
+    a no-context refinement). Delegates to the Orchestrator helper
+    which already knows how to crop messages / chars.
+    """
+    return session.orch.extract_search_context(session.memory)
+
+
+def _format_suggestion(s: SearchSuggestion) -> str:
+    """Compact one-block pretty-print for the suggestion banner."""
+    mode_part = f" [dim](mode: {s.mode})[/dim]" if s.mode else ""
+    conf = f"{s.confidence:.0%}" if s.confidence else "—"
+    return (
+        f"[bold]Suggested next search:[/bold] [cyan]{s.query}[/cyan]"
+        f"{mode_part}\n"
+        f"[dim]Reason:[/dim] {s.reason or '(no reason given)'} "
+        f"[dim](confidence {conf})[/dim]"
+    )
+
+
+def _format_search_args(query: str, mode: str | None) -> str:
+    """Compose the argv string that would feed `cmd_search`."""
+    if not mode:
+        return query
+    # Quote group:<author> to survive shlex when the author has spaces.
+    if " " in mode:
+        return f'--mode "{mode}" {query}'
+    return f"--mode {mode} {query}"
+
+
+@slash(
+    "refine",
+    summary="Ask Searcher to suggest the next search query from recent discussion.",
+    usage="/refine",
+)
+def cmd_refine(session: ChatSession, args: str) -> None:
+    context = _build_refinement_context(session)
+    if not context:
+        session.console.print(
+            "[dim]Not enough conversation yet. Discuss or read a paper first, "
+            "then run /refine.[/dim]"
+        )
+        return
+
+    try:
+        with session.console.status(
+            "[bold]Searcher: building refined query…[/bold]"
+        ):
+            suggestion = session.searcher.suggest_refinement(
+                context, previous_query=session.last_search_query or None
+            )
+    except LLMError as exc:
+        session.console.print(f"[red]Error:[/red] {exc}")
+        return
+
+    if not suggestion.query:
+        session.console.print(
+            "[yellow]Searcher returned no refined query.[/yellow] "
+            "[dim]Try discussing more, or run /search manually.[/dim]"
+        )
+        return
+
+    session.console.print(_format_suggestion(suggestion))
+    session.memory.append(
+        "system",
+        f"Refinement suggestion: query={suggestion.query!r} "
+        f"mode={suggestion.mode} reason={suggestion.reason!r}",
+    )
+    # Interactive accept/edit/skip - the input loop is intentionally simple
+    # so non-interactive callers (tests / LLM tool) can short-circuit.
+    try:
+        choice = session.input_fn(
+            "Run this search? [y]es / [e]dit / [s]kip > "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        choice = "s"
+    if choice in ("", "s", "skip", "n", "no"):
+        session.console.print("[dim]Skipped.[/dim]")
+        return
+    if choice in ("y", "yes", ""):
+        cmd_search(session, _format_search_args(suggestion.query, suggestion.mode))
+        return
+    if choice.startswith("e"):
+        edited = session.input_fn(
+            f"Edit (current: {suggestion.query}) > "
+        ).strip()
+        if not edited:
+            session.console.print("[dim]No edit; skipping.[/dim]")
+            return
+        cmd_search(session, _format_search_args(edited, suggestion.mode))
+        return
+    session.console.print("[dim]Unrecognised choice; skipping.[/dim]")
+
+
+@register_llm_tool(
+    "suggest_search_refinement",
+    _function_schema(
+        "suggest_search_refinement",
+        "Read the recent discussion transcript and propose the next search "
+        "query (with optional bias mode and a one-sentence reason). Returns "
+        "JSON with fields: query, mode, reason, confidence. The tool does "
+        "NOT execute the search - chain into search_arxiv afterwards if the "
+        "user accepts.",
+        {},
+    ),
+)
+def exec_suggest_search_refinement(
+    session: ChatSession, args: dict[str, Any]
+) -> str:
+    context = _build_refinement_context(session)
+    if not context:
+        return "Error: not enough discussion context to refine. Discuss or load a paper first."
+    try:
+        suggestion = session.searcher.suggest_refinement(
+            context, previous_query=session.last_search_query or None
+        )
+    except LLMError as exc:
+        return f"Error: {exc}"
+    if not suggestion.query:
+        return "Searcher returned no refinement (insufficient signal in discussion)."
+    # Render to the console so the user sees the model's reasoning.
+    session.console.print(_format_suggestion(suggestion))
+    return (
+        "Refinement suggestion: "
+        f"query={suggestion.query!r}, mode={suggestion.mode}, "
+        f"confidence={suggestion.confidence:.2f}, reason={suggestion.reason!r}. "
+        "Call search_arxiv with this query (and mode if set) to run it."
+    )
 
 
 # --------------------------------------------------------- citation graph
