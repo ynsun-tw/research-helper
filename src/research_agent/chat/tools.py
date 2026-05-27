@@ -2695,6 +2695,255 @@ def exec_revise_draft(session: ChatSession, args: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------- state mutations
+#
+# Phase 3 tools surface the write-side CLI commands (style training,
+# fingerprint compute/update, config set) as agent-callable functions.
+#
+# Per the D3 decision: there is NO hard confirmation gate at the tool
+# layer. The agent's system prompt instructs the LLM to confirm with
+# the user before invoking these tools; if the model bypasses that
+# instruction, the worst case is a write the user can rollback (style
+# samples can be re-trained, config can be reset). We accept the
+# trade-off to keep the tool surface small and code-light.
+
+
+@register_llm_tool(
+    "train_style",
+    _function_schema(
+        "train_style",
+        "Import the user's own writing into the Scribe style corpus. "
+        "Accepts arXiv ids (e.g. 'arxiv:2301.07041' or '2301.07041'), "
+        "paths to local PDFs, or a directory of PDFs. The corpus feeds "
+        "fingerprint computation. **State-mutating**: writes paragraphs "
+        "into the style_samples SQLite table and re-downloads PDFs into "
+        "the cache. Per the agent contract, confirm sources with the "
+        "user before calling. After this, the user typically wants "
+        "build_fingerprint next.",
+        {
+            "sources": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Mix of arXiv ids and local PDF paths. Each item is "
+                    "imported; failures don't abort the rest."
+                ),
+            },
+            "directory": {
+                "type": "string",
+                "description": (
+                    "Optional folder to scan for .pdf files (non-recursive)."
+                ),
+            },
+            "append": {
+                "type": "boolean",
+                "description": (
+                    "If true, keep prior samples for any re-imported paper. "
+                    "Default false (replaces old samples for that paper)."
+                ),
+            },
+        },
+    ),
+)
+def exec_train_style(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.cli_style import run_style_train
+
+    sources_raw = args.get("sources") or []
+    if not isinstance(sources_raw, list):
+        return "Error: sources must be an array of strings."
+    sources = [str(s).strip() for s in sources_raw if str(s).strip()]
+    directory_raw = str(args.get("directory") or "").strip()
+    directory: Path | None = (
+        Path(directory_raw).expanduser() if directory_raw else None
+    )
+    append = bool(args.get("append") or False)
+
+    if not sources and directory is None:
+        return (
+            "Error: provide at least one source (arxiv id, PDF path) or a "
+            "directory."
+        )
+
+    try:
+        result = run_style_train(
+            session.cfg,
+            session.console,
+            sources=sources or None,
+            directory=directory,
+            replace=not append,
+        )
+    except Exception as exc:
+        return f"Error during style training: {exc}"
+
+    if result.sources_processed == 0 and result.sources_failed == 0:
+        return "No sources processed (nothing matched)."
+    lines = [
+        f"Style training: {result.paragraphs_added} paragraph(s) added "
+        f"from {result.sources_processed} source(s); "
+        f"{result.sources_failed} failed."
+    ]
+    if result.per_source:
+        for label, count, status in result.per_source[:5]:
+            lines.append(f"- {label}: {count} ({status})")
+        if len(result.per_source) > 5:
+            lines.append(f"... and {len(result.per_source) - 5} more.")
+    if result.paragraphs_added > 0:
+        lines.append(
+            "Next step: build_fingerprint to compute the user's style "
+            "vector from these samples."
+        )
+    return "\n".join(lines)
+
+
+@register_llm_tool(
+    "build_fingerprint",
+    _function_schema(
+        "build_fingerprint",
+        "Compute a style fingerprint from the currently imported samples "
+        "and write it to ~/.research-agent/style/fingerprint.json. "
+        "Overwrites any existing fingerprint without archiving. "
+        "**State-mutating**: confirm with the user before calling, "
+        "especially if a fingerprint already exists (use "
+        "update_fingerprint instead to preserve history).",
+        {},
+    ),
+)
+def exec_build_fingerprint(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.cli_style import run_style_fingerprint
+
+    code = run_style_fingerprint(session.cfg, session.console)
+    if code != 0:
+        return (
+            "Error: no style samples to learn from. Run train_style first."
+        )
+    return (
+        f"Fingerprint built and written to {session.cfg.fingerprint_path}. "
+        "Subsequent draft_section / revise_draft calls will use it."
+    )
+
+
+@register_llm_tool(
+    "update_fingerprint",
+    _function_schema(
+        "update_fingerprint",
+        "Recompute the style fingerprint from the static sample corpus "
+        "PLUS any accepted Scribe revisions, and archive the previous "
+        "fingerprint as fingerprint_vN.json so style drift is auditable. "
+        "**State-mutating**: confirm with the user before calling.",
+        {},
+    ),
+)
+def exec_update_fingerprint(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.cli_style import run_style_update
+
+    code = run_style_update(session.cfg, session.console)
+    if code != 0:
+        return (
+            "Error: no samples or revisions to learn from. Run "
+            "train_style first."
+        )
+    return (
+        "Fingerprint updated; the previous version was archived under "
+        f"~/.research-agent/style/ for drift inspection. Active "
+        f"fingerprint: {session.cfg.fingerprint_path}."
+    )
+
+
+@register_llm_tool(
+    "get_config",
+    _function_schema(
+        "get_config",
+        "Read configuration values from ~/.research-agent/config.yaml. "
+        "Pass a specific ``key`` to read one field (api_key is always "
+        "masked), or omit to get a summary of all keys. Read-only.",
+        {
+            "key": {
+                "type": "string",
+                "description": (
+                    "Optional. One of: api_key, model, base_url, "
+                    "data_dir, app_title, app_url, language, "
+                    "alert_threshold."
+                ),
+            },
+        },
+    ),
+)
+def exec_get_config(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.config import KNOWN_KEYS, ConfigError
+
+    key = str(args.get("key") or "").strip().lower()
+    cfg = session.cfg
+    if key:
+        try:
+            value = cfg.get_field(key)
+        except ConfigError as exc:
+            return f"Error: {exc}"
+        return f"{key} = {value}"
+    lines = ["Current configuration (api_key masked):"]
+    for k in sorted(KNOWN_KEYS):
+        lines.append(f"- {k} = {cfg.get_field(k)}")
+    lines.append(f"- config_path = {cfg.config_path}")
+    return "\n".join(lines)
+
+
+@register_llm_tool(
+    "set_config",
+    _function_schema(
+        "set_config",
+        "Update a single configuration field and persist to "
+        "~/.research-agent/config.yaml. **State-mutating**: confirm "
+        "the exact key + value with the user before calling — this "
+        "overwrites disk state and changes to api_key / model / "
+        "base_url require a REPL restart to take full effect.",
+        {
+            "key": {
+                "type": "string",
+                "description": (
+                    "One of: api_key, model, base_url, data_dir, "
+                    "app_title, app_url, language, alert_threshold."
+                ),
+            },
+            "value": {
+                "type": "string",
+                "description": (
+                    "New value (always passed as a string; numeric "
+                    "fields like alert_threshold are parsed by the "
+                    "config layer)."
+                ),
+            },
+        },
+        required=["key", "value"],
+    ),
+)
+def exec_set_config(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.config import ConfigError
+
+    key = str(args.get("key") or "").strip().lower()
+    value = args.get("value")
+    if not key:
+        return "Error: key is required."
+    if value is None:
+        return "Error: value is required."
+    value_str = str(value)
+    try:
+        session.cfg.set_field(key, value_str)
+    except ConfigError as exc:
+        return f"Error: {exc}"
+    # Mask api_key in the return so the model doesn't echo secrets.
+    displayed = (
+        session.cfg.masked_api_key()
+        if key == "api_key"
+        else session.cfg.get_field(key)
+    )
+    note = ""
+    if key in {"api_key", "model", "base_url", "data_dir"}:
+        note = (
+            " (the change is written to disk; restart the REPL for it "
+            "to fully take effect on the active LLM client)"
+        )
+    return f"Set {key} = {displayed}.{note}"
+
+
 # ---------------------------------------------------------- diagnostics
 
 
