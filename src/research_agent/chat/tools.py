@@ -2013,39 +2013,30 @@ def _format_figure_summary(figure_type: str, drafts: list[FigureDraft]) -> str:
     "draft_section",
     _function_schema(
         "draft_section",
-        "Have Scribe draft a paper section in the user's voice. Generates "
-        "N variants in parallel (default 3) and caches them in the "
-        "session under the canonical section name. Use when the user "
-        "asks 'draft an intro', 'write a related work section', etc. "
-        "The drafts are NOT persisted to disk — surface a few-sentence "
-        "preview, and call save_draft_to_file only when the user "
-        "explicitly asks to save.",
+        "Draft a paper section in the user's voice (N variants, cached, "
+        "not saved to disk).",
         {
             "section": {
                 "type": "string",
                 "description": (
-                    "Target section: abstract, introduction, related_work, "
-                    "method, results, discussion, conclusion. Aliases like "
-                    "'intro' / 'methods' / 'experiments' are accepted."
+                    "abstract|introduction|related_work|method|results|"
+                    "discussion|conclusion (aliases 'intro' / 'methods' / "
+                    "'experiments' accepted)."
                 ),
             },
             "context": {
                 "type": "string",
-                "description": (
-                    "Free-form research context the Scribe should ground "
-                    "the draft in. Will also trigger related-idea + "
-                    "discussion recall from the user's memory store."
-                ),
+                "description": "Research context to ground the draft in.",
             },
             "target_words": {
                 "type": "integer",
-                "description": "Target word count per draft (±20%). Default 300.",
+                "description": "Target words per draft (±20%). Default 300.",
                 "minimum": 50,
                 "maximum": 2000,
             },
             "versions": {
                 "type": "integer",
-                "description": "Number of stylistic variants (1-5). Default 3.",
+                "description": "Variants (1-5). Default 3.",
                 "minimum": 1,
                 "maximum": 5,
             },
@@ -2053,11 +2044,8 @@ def _format_figure_summary(figure_type: str, drafts: list[FigureDraft]) -> str:
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Existing drafts the Scribe should stay consistent "
-                    "with. Each item is either a file path or a `latest` "
-                    "ref ('latest', 'latest:<section>', "
-                    "'latest:<section>:<version>') pointing at a draft "
-                    "already in the session cache."
+                    "Paths or `latest` refs ('latest', 'latest:<section>', "
+                    "'latest:<section>:<version>') for consistency check."
                 ),
             },
         },
@@ -2120,36 +2108,27 @@ def exec_draft_section(session: ChatSession, args: dict[str, Any]) -> str:
     "draft_figure",
     _function_schema(
         "draft_figure",
-        "Have Illustrator generate code for a figure: TikZ "
-        "(architecture), matplotlib/seaborn Python (result), or a "
-        "text-to-image prompt (concept). Produces N variants in "
-        "parallel and caches them. Use when the user asks 'draw a "
-        "diagram of …', 'plot accuracy vs baseline', 'give me a "
-        "DALL-E prompt for …'. Optional ``verify`` actually runs each "
-        "Python draft in a subprocess (only meaningful for result "
-        "figures).",
+        "Generate figure code (TikZ for architecture, matplotlib for "
+        "result, text-to-image prompt for concept). N variants, cached.",
         {
             "figure_type": {
                 "type": "string",
                 "description": (
-                    "architecture | result | concept. Aliases "
-                    "'pipeline', 'plot', 'schematic' are accepted."
+                    "architecture|result|concept (aliases 'pipeline', "
+                    "'plot', 'schematic' accepted)."
                 ),
             },
             "description": {
                 "type": "string",
-                "description": "Free-form description of what to draw.",
+                "description": "What to draw.",
             },
             "data": {
                 "type": "string",
-                "description": (
-                    "Quantitative payload for result figures, e.g. "
-                    "'accuracy: 85% (ours) vs 80% (baseline)'."
-                ),
+                "description": "Quantitative payload for result figures.",
             },
             "versions": {
                 "type": "integer",
-                "description": "Number of variants (1-4). Default 2.",
+                "description": "Variants (1-4). Default 2.",
                 "minimum": 1,
                 "maximum": 4,
             },
@@ -2157,8 +2136,7 @@ def exec_draft_section(session: ChatSession, args: dict[str, Any]) -> str:
                 "type": "boolean",
                 "description": (
                     "If true and figure_type=result, actually run each "
-                    "Python draft (30s timeout, Agg backend) and report "
-                    "success/failure. No effect otherwise."
+                    "draft (30s, Agg backend) and report pass/fail."
                 ),
             },
         },
@@ -2213,49 +2191,38 @@ def exec_draft_figure(session: ChatSession, args: dict[str, Any]) -> str:
     "save_draft_to_file",
     _function_schema(
         "save_draft_to_file",
-        "Persist a cached Scribe / Illustrator draft (or a revision) to "
-        "a Markdown file. This is the ONLY tool that writes drafts to "
-        "disk — every other writing tool keeps results in session "
-        "memory. Use after the user reviews the draft preview and says "
-        "'save it', 'write it to <path>', or 'export the revision'.",
+        "Write a cached draft / figure / revision to a Markdown file. "
+        "Only call after the user explicitly asks to save.",
         {
             "path": {
                 "type": "string",
-                "description": (
-                    "Destination path. ~ is expanded; parent dirs are "
-                    "created. .md suffix recommended."
-                ),
+                "description": "Destination (~ expanded, parents created).",
             },
             "kind": {
                 "type": "string",
                 "enum": ["section", "figure", "revision"],
                 "description": (
-                    "What to save: section (Scribe draft), figure "
-                    "(Illustrator draft), or revision (output of "
-                    "revise_draft). If omitted, inferred from cache "
-                    "when unambiguous."
+                    "section|figure|revision. Omit to infer when "
+                    "unambiguous."
                 ),
             },
             "section": {
                 "type": "string",
                 "description": (
-                    "Section name (canonical or alias). Required for "
-                    "kind=section/revision when multiple sections are "
-                    "cached; otherwise inferred."
+                    "Section name. Required if multiple sections cached."
                 ),
             },
             "figure_type": {
                 "type": "string",
                 "description": (
-                    "Figure type. Required for kind=figure when "
-                    "multiple are cached; otherwise inferred."
+                    "Figure type. Required if multiple figures cached."
                 ),
             },
             "version": {
                 "type": "string",
                 "description": (
-                    "Specific variant letter (A/B/C/...). If omitted, "
-                    "saves the whole bouquet. Ignored for kind=revision."
+                    "Variant letter (A/B/C). Omit to save the whole "
+                    "bouquet. Ignored for revision."
                 ),
             },
         },
@@ -2560,36 +2527,22 @@ def exec_check_self_plagiarism(
     "revise_draft",
     _function_schema(
         "revise_draft",
-        "Run the auto-review pipeline (Analyst + Critic in parallel, "
-        "then Scribe rewrites). NON-INTERACTIVE: the Scribe addresses "
-        "every reviewer issue automatically; the issue list is "
-        "returned to you so the user can see what changed. The "
-        "revised draft is cached in session.recent_revisions[section]; "
-        "save it with save_draft_to_file(kind='revision'). Does not "
-        "touch the disk or the draft_revisions table.",
+        "Auto-review (Analyst+Critic) then Scribe rewrite. Non-interactive; "
+        "revised draft is cached as a revision.",
         {
             "target": {
                 "type": "string",
-                "description": (
-                    "Either a path to the draft file, or a `latest` ref. "
-                    "When using a path, also pass `section` so the "
-                    "reviewers know which prompts to apply."
-                ),
+                "description": "Path or `latest` ref to the draft.",
             },
             "section": {
                 "type": "string",
                 "description": (
-                    "Section name (abstract / introduction / ...). "
-                    "Required when target is a path; inferred when "
-                    "target is a `latest:<section>` ref."
+                    "Section name. Required when target is a path."
                 ),
             },
             "target_words": {
                 "type": "integer",
-                "description": (
-                    "Target word count for the revision. Default: "
-                    "match the original draft's length."
-                ),
+                "description": "Default: match original length.",
                 "minimum": 50,
                 "maximum": 2000,
             },
@@ -2712,34 +2665,24 @@ def exec_revise_draft(session: ChatSession, args: dict[str, Any]) -> str:
     "train_style",
     _function_schema(
         "train_style",
-        "Import the user's own writing into the Scribe style corpus. "
-        "Accepts arXiv ids (e.g. 'arxiv:2301.07041' or '2301.07041'), "
-        "paths to local PDFs, or a directory of PDFs. The corpus feeds "
-        "fingerprint computation. **State-mutating**: writes paragraphs "
-        "into the style_samples SQLite table and re-downloads PDFs into "
-        "the cache. Per the agent contract, confirm sources with the "
-        "user before calling. After this, the user typically wants "
-        "build_fingerprint next.",
+        "Import user writing into the style corpus. State-mutating; "
+        "confirm with user first.",
         {
             "sources": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": (
-                    "Mix of arXiv ids and local PDF paths. Each item is "
-                    "imported; failures don't abort the rest."
-                ),
+                "description": "Mix of arXiv ids and local PDF paths.",
             },
             "directory": {
                 "type": "string",
                 "description": (
-                    "Optional folder to scan for .pdf files (non-recursive)."
+                    "Folder to scan for .pdf files (non-recursive)."
                 ),
             },
             "append": {
                 "type": "boolean",
                 "description": (
-                    "If true, keep prior samples for any re-imported paper. "
-                    "Default false (replaces old samples for that paper)."
+                    "Keep prior samples per paper. Default false (replace)."
                 ),
             },
         },

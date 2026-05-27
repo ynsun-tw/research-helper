@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from rich.console import Console
 from rich.panel import Panel
@@ -19,170 +19,69 @@ from research_agent.core.llm import (
     LLMProvider,
     ToolCall,
 )
+from research_agent.memory.working_memory import estimate_tokens
 
 # ``?`` and ``/?`` are conventional REPL shortcuts for "give me help". We
 # rewrite them to ``/help`` at the input boundary so users don't have to
 # remember the slash form.
 HELP_ALIASES = frozenset({"?", "/?", "help"})
 
+# The full tool list lives in the OpenAI ``tools`` payload (see
+# ``llm_tool_schemas()``); each schema already carries its own
+# ``description``. We deliberately do NOT repeat per-tool prose here —
+# duplicating the schemas is what made the earlier prompt ~2.6K tokens.
+# Keep this prompt to the *routing rules* the schemas can't express
+# (when to chain X→Y, when state-mutation needs confirmation, output
+# style). Anything stated here ships on every LLM round-trip.
 CHAT_SYSTEM_PROMPT = """\
-You are Research Agent, a critical research companion running inside a CLI shell.
+You are Research Agent, a critical research companion in a CLI shell.
 
-You have access to function-calling tools that operate on the user's local state
-(papers, debates, saved ideas). Call them when the request needs real data:
+You have function-calling tools for the user's local research state
+(papers, debates, ideas, drafts, style corpus). Tool names and
+parameters live in the ``tools`` payload — read them; don't fabricate.
 
-  search_arxiv(query, max_results?, mode?) - find candidate papers on arXiv.
-                                        Optional mode biases the candidate
-                                        set: 'theoretical' / 'applied' /
-                                        'group:<author-name>'. Use mode
-                                        when the user is explicit about
-                                        wanting theory vs. experiments, or
-                                        when they name a specific author
-  recent_searches(limit?)             - look up the user's past /search history
-                                        and which arXiv ids they already read;
-                                        use this to resolve references like
-                                        "the BERT paper from yesterday"
-  recall_history(query, limit?)       - semantic search across past REPL
-                                        discussions (cross-session); use this
-                                        when the user references something
-                                        previously discussed
-  load_paper(source)                  - download + analyze (Analyst + Critic);
-                                        sets the anchor paper
-  discuss_idea(idea)                  - debate an idea grounded in the anchor
-                                        paper (must load_paper first)
-  save_current_idea(title?)           - persist the active debate as an idea
-  list_ideas()                        - list saved ideas
-  queue_add(arxiv_id, title?)         - add a paper to the user's reading queue
-                                        ("save it for later"); doesn't load it
-  queue_list(status?)                 - inspect the queue (default pending);
-                                        status='all' includes done/skipped
-  queue_next()                        - return the next pending arxiv_id from
-                                        the queue without mutating state;
-                                        chain into load_paper to read it
-  get_citations(arxiv_id, max_results?) - papers that cite the given paper
-                                        (forward references, via Semantic
-                                        Scholar). Use to find follow-up work
-                                        after the user loads a paper.
-  get_references(arxiv_id, max_results?) - papers cited by the given paper
-                                        (backward references). Use to trace
-                                        intellectual lineage / "what does
-                                        this build on?"
-  suggest_search_refinement()         - read the recent discussion and
-                                        propose the *next* search query
-                                        (with optional mode + reason).
-                                        Use when the user asks "what
-                                        should I search next?" or pivots
-                                        topic mid-conversation; then
-                                        chain into search_arxiv if they
-                                        accept.
-  research_insights(since_days?)      - roll up local activity (papers
-                                        read, ideas, discussion stats)
-                                        as a Markdown report. Read-only.
-                                        Use for "how am I doing?" /
-                                        "what have I been reading?"
-  run_doctor()                        - verify the local environment
-                                        (config, API key, DB integrity,
-                                        ChromaDB, disk). Read-only; no
-                                        network or LLM. Call when the
-                                        user reports anomalies or asks
-                                        "is everything OK?"
-  style_show()                        - show the Scribe style corpus
-                                        (paragraph counts per source
-                                        paper) + whether a fingerprint
-                                        has been built. Read-only. Use
-                                        for "is my style trained?" or
-                                        before any draft/revise action
-                                        that needs a fingerprint.
-  style_history()                     - list archived fingerprint
-                                        versions for drift inspection.
-                                        Read-only.
-  draft_section(section, context?,    - have Scribe draft a section in
-    target_words?, versions?,            the user's voice. Generates N
-    check_against?)                      variants in parallel and caches
-                                        them in the session. Does NOT
-                                        write to disk. ``check_against``
-                                        accepts file paths or ``latest``
-                                        refs ('latest', 'latest:<sec>',
-                                        'latest:<sec>:<ver>') pointing
-                                        at cached drafts.
-  draft_figure(figure_type,           - have Illustrator generate figure
-    description, data?, versions?,       code (TikZ / matplotlib / DALL-E
-    verify?)                             prompt). Caches the bouquet.
-  check_self_plagiarism(target,       - scan a draft against the user's
-    threshold?)                          published-work corpus. ``target``
-                                        is a path or a ``latest`` ref.
-                                        No LLM call.
-  revise_draft(target, section?,      - Analyst + Critic auto-review +
-    target_words?)                       Scribe rewrite (non-interactive).
-                                        Caches the revision in
-                                        ``session.recent_revisions``.
-  save_draft_to_file(path, kind?,     - the ONLY tool that writes drafts
-    section?, figure_type?, version?)    to disk. ``kind`` is section /
-                                        figure / revision; omit it when
-                                        only one kind is cached.
-  train_style(sources?, directory?,   - import the user's own writing
-    append?)                             into the Scribe style corpus.
-                                        **STATE-MUTATING**.
-  build_fingerprint()                 - compute fresh fingerprint from
-                                        current samples (overwrites
-                                        existing). **STATE-MUTATING**.
-  update_fingerprint()                - recompute fingerprint from
-                                        samples + accepted revisions,
-                                        archiving the previous version.
-                                        **STATE-MUTATING**.
-  get_config(key?)                    - read configuration. Read-only.
-  set_config(key, value)              - write a configuration field to
-                                        disk. **STATE-MUTATING**.
-
-Rules:
-- When the user refers back to an earlier search ("that transformer paper
-  I searched last week"), call recent_searches first to recover the
-  arxiv_id, then chain into load_paper.
-- When the user refers to a prior conversation ("we already talked about X",
-  "what did we conclude about Y"), call recall_history first; cite the
-  recalled snippets briefly so the user sees the connection.
-- Always call load_paper before discuss_idea; if no paper is loaded, do it first.
-- Do NOT fabricate paper content or arXiv ids; rely on tool results.
-- After tools complete, write a short, plain-language summary for the user.
-- When the user says "save this for later", "queue this paper", or "I'll
-  read this later", call queue_add (do not load_paper). For "what's on my
-  reading list?" call queue_list. For "read the next one" chain queue_next
-  -> load_paper.
-- When the user wants to navigate the citation graph ("what cited this?",
-  "who built on this work?", "what does this paper rely on?"), call
-  get_citations or get_references on the anchor paper's arxiv_id and
-  surface a few high-signal hits; suggest /queue add for follow-ups.
-- When the user asks about the local environment ("is my setup OK?",
-  "anything broken?", "why is X failing?") call run_doctor before
+Routing rules (schemas don't encode these):
+- References to past searches ("that paper from yesterday") → call
+  ``recent_searches`` first to recover the arxiv_id, then ``load_paper``.
+- References to past conversations ("what did we conclude…") → call
+  ``recall_history`` first; briefly cite recalled snippets.
+- ``discuss_idea`` requires an anchor paper — call ``load_paper`` first
+  if none is loaded.
+- "save this for later" / "queue this" → ``queue_add`` (NOT ``load_paper``).
+  "read the next one" → ``queue_next`` then ``load_paper``.
+- Citation-graph questions ("what cited this?" / "what does this rely on?")
+  → ``get_citations`` or ``get_references`` on the anchor paper.
+- Environment complaints ("is my setup OK?") → ``run_doctor`` before
   speculating.
-- Before draft_section / revise_draft, call style_show if you're not
-  sure a fingerprint exists; if it doesn't, mention that the draft
-  will use generic academic prose instead of the user's voice.
-- After draft_section or draft_figure, NEVER auto-save the drafts.
-  Always paraphrase the preview and ask the user which version
-  (and where) they want saved before calling save_draft_to_file.
-- For "make sure I'm not duplicating my own work" / "any overlap with
-  what I've already published?" call check_self_plagiarism against
-  the latest draft (target='latest:<section>') or an explicit path.
-- For "tighten this", "rewrite it", "address the issues" on an
-  existing draft, call revise_draft. Surface the analyst + critic
-  issue list; do NOT pretend to have applied human judgement on each
-  one — the tool is fully automatic in this mode.
-- For ANY tool marked **STATE-MUTATING** (train_style,
-  build_fingerprint, update_fingerprint, set_config):
-  · First, summarise the exact action you're about to take ("I'll
-    import 12 paragraphs from these 3 papers …" / "I'll overwrite
-    your fingerprint at …" / "I'll set api_key = sk-or-…").
-  · Then explicitly ask for confirmation ("OK to proceed?").
-  · Only call the tool after the user agrees.
-  · If the user says yes but the action is irreversible (overwriting
-    a fingerprint that hasn't been archived), mention that fact
-    once more before calling.
-- The user can also invoke commands directly with slashes (/search, /history,
-  /recall, /read, /discuss, /queue, /cites, /refs, /refine, /paper, /idea,
-  /ideas, /insights, /doctor, /style, /help, /exit) - mention those when
-  guidance is more useful than a tool call.
+- Before ``draft_section`` / ``revise_draft``, if unsure a fingerprint
+  exists, call ``style_show`` first. If it doesn't, warn the user the
+  draft will use generic academic prose.
+- After ``draft_section`` / ``draft_figure``: NEVER auto-save. Paraphrase
+  the preview and ask which version + path before calling
+  ``save_draft_to_file``.
+- "make sure I'm not duplicating my own work" → ``check_self_plagiarism``
+  against ``latest:<section>`` or an explicit path.
+- "tighten this" / "address the issues" → ``revise_draft``. Surface the
+  analyst+critic issue list; don't pretend you applied human judgement
+  on each one — the tool is fully automatic.
+
+State-mutating tools (``train_style``, ``build_fingerprint``,
+``update_fingerprint``, ``set_config``):
+1. Summarise the exact action ("I'll import 12 paragraphs from …",
+   "I'll set api_key = sk-or-…").
+2. Ask for confirmation.
+3. Only call the tool after the user agrees.
+4. If irreversible (overwriting an un-archived fingerprint), say so once
+   more before calling.
+
+Output:
+- Do NOT fabricate paper content or arxiv ids — rely on tool results.
+- After tools complete, write a short plain-language summary.
 - Be concise. Mirror the user's language.
+- Users can also invoke commands directly via ``/search``, ``/read``,
+  ``/discuss``, ``/queue``, ``/cites``, ``/refs``, ``/refine``,
+  ``/insights``, ``/doctor``, ``/style``, ``/help``, ``/exit``;
+  suggest those when a single command is clearer than a tool call.
 """
 
 INTRO_TEXT = (
@@ -336,6 +235,29 @@ def _dispatch_slash(session: ChatSession, raw: str) -> None:
 
 MAX_TOOL_ITERATIONS = 6
 
+# Tool results occasionally include the full text of a paper, a multi-KB
+# search hit list, or a draft. Sending those back to the LLM verbatim
+# (especially across multiple agent-loop rounds where the same result
+# gets re-sent) is the single largest avoidable token sink in this
+# system. We cap each ``role=tool`` payload before injecting it into
+# ``messages``; the model still sees the head + a tail "(N chars
+# elided; ask again with a narrower query if you need the rest)" hint,
+# which is enough for it to either work with what's there or ask for a
+# narrower call. Roughly 8000 chars ≈ 2000 tokens.
+MAX_TOOL_RESULT_CHARS = 8000
+
+
+def _cap_tool_result(text: str) -> str:
+    if len(text) <= MAX_TOOL_RESULT_CHARS:
+        return text
+    elided = len(text) - MAX_TOOL_RESULT_CHARS
+    head = text[:MAX_TOOL_RESULT_CHARS]
+    return (
+        f"{head}\n\n[... {elided} chars elided to fit context budget. "
+        "Re-call the tool with a narrower query / smaller limit / more "
+        "specific args if you need the rest.]"
+    )
+
 
 def _chat_with_llm(session: ChatSession, user_text: str) -> None:
     """Run an LLM agent loop: chat → maybe tool_call → execute → loop until text.
@@ -346,14 +268,26 @@ def _chat_with_llm(session: ChatSession, user_text: str) -> None:
     the citations…" before a tool call) and then surface a ``→ calling …``
     line. We deliberately do NOT use ``console.status`` here — the live
     spinner conflicts with progressive token printing.
+
+    Emits a ``[~N in → ~M out tokens · K rounds]`` telemetry line at the
+    end so users see the cost shape (and the impact of, e.g., loading a
+    huge paper or chaining many tools).
     """
     session.memory.append("user", user_text)
     messages = _build_messages(session)
     tools = llm_tool_schemas() or None
+    tools_overhead = _estimate_message_tokens([]) + _estimate_tools_tokens(tools)
+
+    in_tokens = 0
+    out_tokens = 0
+    rounds = 0
 
     try:
         for _ in range(MAX_TOOL_ITERATIONS):
+            rounds += 1
+            in_tokens += _estimate_message_tokens(messages) + tools_overhead
             response = _stream_one_response(session, messages, tools)
+            out_tokens += estimate_tokens(response.content)
             if not response.has_tool_calls:
                 reply = response.content.strip()
                 if not reply:
@@ -361,6 +295,7 @@ def _chat_with_llm(session: ChatSession, user_text: str) -> None:
                     session.memory.messages.pop()
                     return
                 session.memory.append("assistant", reply)
+                _print_token_footer(session, in_tokens, out_tokens, rounds)
                 return
 
             assistant_msg = ChatMessage(
@@ -375,22 +310,64 @@ def _chat_with_llm(session: ChatSession, user_text: str) -> None:
                 messages.append(
                     ChatMessage(
                         role="tool",
-                        content=result_text,
+                        content=_cap_tool_result(result_text),
                         tool_call_id=tc.id,
                         name=tc.name,
                     )
                 )
+                # Tool results are NOT conversational; persisting them
+                # into WorkingMemory used to feed them right back to the
+                # LLM on the next turn (via ``_build_messages``), which
+                # doubled the cost of every multi-turn session. We tag
+                # them with ``kind=tool_log`` so ``_build_messages``
+                # filters them out, but keep them in the audit trail and
+                # the discussions DB so /history still shows what ran.
                 session.memory.append(
                     "system",
                     f"[tool {tc.name}] {result_text[:400]}",
+                    metadata={"kind": "tool_log"},
                 )
 
         session.console.print(
             "[yellow]Stopped after too many tool iterations.[/yellow] "
             "Try a more specific request."
         )
+        _print_token_footer(session, in_tokens, out_tokens, rounds)
     except LLMError as exc:
         session.console.print(f"[red]Error:[/red] {exc}")
+
+
+def _estimate_message_tokens(messages: Sequence[ChatMessage]) -> int:
+    """Approximate prompt tokens by counting content lengths.
+
+    Uses the same ~4 chars/token heuristic as ``WorkingMemory.estimate_tokens``;
+    we don't ship tiktoken so this is intentionally a coarse proxy. Tool-call
+    arguments + role overhead are included (~16 tokens per message) so the
+    estimate stays in the right order of magnitude for multi-tool turns.
+    """
+    total = 0
+    for m in messages:
+        total += estimate_tokens(m.content) + 16
+        for tc in m.tool_calls:
+            total += estimate_tokens(tc.arguments) + 12
+    return total
+
+
+def _estimate_tools_tokens(tools: list[dict[str, object]] | None) -> int:
+    """The tool schemas serialize as JSON on the wire; estimate via dump size."""
+    if not tools:
+        return 0
+    return estimate_tokens(json.dumps(tools))
+
+
+def _print_token_footer(
+    session: ChatSession, in_tokens: int, out_tokens: int, rounds: int
+) -> None:
+    """One-line telemetry so the user can see the cost shape of each turn."""
+    session.console.print(
+        f"[dim][~{in_tokens} in → ~{out_tokens} out tokens · "
+        f"{rounds} round{'s' if rounds != 1 else ''}][/dim]"
+    )
 
 
 def _stream_one_response(
@@ -480,7 +457,17 @@ def _arg_preview(args: dict[str, object]) -> str:
     return "(" + ", ".join(items) + ")"
 
 
-def _build_messages(session: ChatSession, *, history_limit: int = 20) -> list[ChatMessage]:
+def _build_messages(session: ChatSession, *, history_limit: int = 8) -> list[ChatMessage]:
+    """Assemble the message array for one LLM call.
+
+    Filters out ``tool_log`` messages: those are persisted for /history
+    + audit, but feeding them back to the LLM next turn would be
+    double-charging tokens for context the model has already digested
+    via the live ``role=tool`` payload during the originating turn.
+    The default ``history_limit`` of 8 (was 20) keeps the rolling
+    conversation tight; long-range context is recoverable via
+    ``recall_history`` on demand.
+    """
     messages: list[ChatMessage] = [
         ChatMessage(role="system", content=CHAT_SYSTEM_PROMPT),
     ]
@@ -495,7 +482,11 @@ def _build_messages(session: ChatSession, *, history_limit: int = 20) -> list[Ch
                 ),
             )
         )
-    for msg in session.memory.messages[-history_limit:]:
+    eligible = [
+        m for m in session.memory.messages
+        if m.metadata.get("kind") != "tool_log"
+    ]
+    for msg in eligible[-history_limit:]:
         if msg.role == "user":
             role: str = "user"
         elif msg.role in {"system", "tool"}:
