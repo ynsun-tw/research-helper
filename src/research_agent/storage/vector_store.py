@@ -100,7 +100,7 @@ class IdeaVectorStore:
                 )
                 pairs = [
                     (iid, 1.0 - float(dist))
-                    for iid, dist in zip(ids, distances, strict=False)
+                    for iid, dist in zip(ids, distances)
                 ]
                 if exclude_id:
                     pairs = [(i, s) for i, s in pairs if i != exclude_id]

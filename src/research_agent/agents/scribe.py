@@ -182,7 +182,13 @@ class Scribe(BaseAgent):
             raw_outputs = [self._chat(p) for p in prompts]
 
         drafts: list[Draft] = []
-        for version, (label, _directive), raw in zip(versions, variants, raw_outputs, strict=True):
+        # 3.9 lacks ``zip(strict=True)``; assert the invariant explicitly so
+        # mismatched lengths still surface loudly instead of silently
+        # truncating the draft set.
+        assert len(versions) == len(variants) == len(raw_outputs), (
+            "scribe internal: versions/variants/raw_outputs length mismatch"
+        )
+        for version, (label, _directive), raw in zip(versions, variants, raw_outputs):
             text, note = _parse_draft(raw)
             drafts.append(
                 Draft(

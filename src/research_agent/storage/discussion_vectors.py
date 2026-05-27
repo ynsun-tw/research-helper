@@ -93,7 +93,7 @@ class DiscussionVectorStore:
                     result.get("metadatas", [[]])[0]
                 )
                 if exclude_session_id:
-                    paired = list(zip(ids, metadatas, strict=False))
+                    paired = list(zip(ids, metadatas))
                     ids = [
                         mid
                         for mid, meta in paired
