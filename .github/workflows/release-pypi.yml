@@ -1,0 +1,238 @@
+# Release to PyPI (production) — manually gated.
+#
+# ⚠️  PyPI uploads are PERMANENT. Once a version is published you cannot
+#     re-upload it, even after deletion. Treat this workflow as the
+#     point of no return.
+#
+# Mirror of release-testpypi.yml but pointing at production PyPI. Usual
+# release flow:
+#   1. bump __version__ + pyproject.toml, merge to main
+#   2. run release-testpypi.yml → smoke-test the install from TestPyPI
+#   3. THEN run release-pypi.yml on the same version
+#
+# Trigger: Actions tab → "Release to PyPI" → Run workflow → enter version.
+#
+# Flow:
+#   verify (version match + lint) → test (Py 3.11/3.12, 80% cov) →
+#   build (sdist + wheel + twine check) → ⏸ manual approval gate →
+#   publish (tag v<version> + upload to PyPI via trusted publishing).
+#
+# ============================================================================
+# One-time GitHub + PyPI setup
+# ============================================================================
+#
+# RECOMMENDED: Trusted Publishing (no API token, OIDC-based)
+# ----------------------------------------------------------
+#   1. PyPI → Account settings → Publishing → "Add a new pending publisher"
+#        PyPI Project Name:    paper-research-agent
+#        Owner:                ynsun-tw
+#        Repository name:      research-helper
+#        Workflow name:        release-pypi.yml
+#        Environment name:     pypi-release
+#      After the first successful publish, the "pending" publisher becomes
+#      an "active" trusted publisher.
+#   2. GitHub → Settings → Environments → New environment "pypi-release"
+#        Required reviewers:   <you / your team>
+#        Deployment branches:  Selected branches → main  (recommended)
+#
+# ALTERNATIVE: API token (if you can't use trusted publishing)
+# ------------------------------------------------------------
+#   1. PyPI → Account settings → API tokens → Add API token (scope:
+#      this project, after first upload, or "Entire account" before it
+#      exists).
+#   2. GitHub → Settings → Secrets and variables → Actions → New secret
+#        Name:  PYPI_API_TOKEN
+#        Value: <pypi-...>
+#   3. Replace the `pypa/gh-action-pypi-publish` step at the bottom of
+#      this file with the commented-out twine block.
+
+name: Release to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (must match __version__ and pyproject.toml, e.g. 0.5.0)"
+        required: true
+        type: string
+      confirm:
+        description: 'Type "PUBLISH" to confirm this PyPI release is intentional and irreversible'
+        required: true
+        type: string
+
+permissions:
+  contents: write  # publish job needs this to push the v<version> tag
+
+concurrency:
+  group: release-pypi
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify version + confirmation + lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse without explicit PUBLISH confirmation
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.confirm }}" != "PUBLISH" ]; then
+            echo "::error::You must type PUBLISH (uppercase) in the confirm input. Got: '${{ inputs.confirm }}'"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Check input version matches __init__.py and pyproject.toml
+        run: |
+          set -euo pipefail
+          input="${{ inputs.version }}"
+          declared=$(python -c "import research_agent; print(research_agent.__version__)")
+          pp=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "input=$input  __version__=$declared  pyproject=$pp"
+          if [ "$input" != "$declared" ] || [ "$input" != "$pp" ]; then
+            echo "::error::Version mismatch — bump src/research_agent/__init__.py and pyproject.toml to $input first."
+            exit 1
+          fi
+      - name: Refuse if version already exists on PyPI
+        run: |
+          set -euo pipefail
+          v="${{ inputs.version }}"
+          code=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/paper-research-agent/${v}/json")
+          if [ "$code" = "200" ]; then
+            echo "::error::Version $v already exists on PyPI. Bump the version and try again — PyPI does not allow re-uploads."
+            exit 1
+          fi
+          echo "PyPI version $v not yet published (HTTP $code). OK to proceed."
+      - name: ruff
+        run: python -m ruff check src tests
+      - name: mypy
+        run: python -m mypy src/research_agent
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: pytest
+        env:
+          RUN_NETWORK_TESTS: ""
+        run: |
+          python -m pytest \
+            -m "not network" \
+            --cov=src/research_agent \
+            --cov-report=term \
+            --cov-fail-under=80
+
+  build:
+    name: Build sdist + wheel
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install build + twine
+        run: |
+          python -m pip install --upgrade pip build twine
+      - name: Build distributions
+        run: python -m build
+      - name: Verify metadata
+        run: python -m twine check dist/*
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ inputs.version }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Tag + publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # ⏸ Manual gate. GitHub pauses this job until a reviewer listed on
+    # the `pypi-release` environment approves the run.
+    environment:
+      name: pypi-release
+      url: https://pypi.org/project/paper-research-agent/${{ inputs.version }}/
+    permissions:
+      contents: write   # push the tag
+      id-token: write   # trusted publishing OIDC token
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Refuse to overwrite an existing tag
+        run: |
+          set -euo pipefail
+          tag="v${{ inputs.version }}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "::error::Tag $tag already exists. Bump the version and try again."
+            exit 1
+          fi
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ inputs.version }}
+          path: dist/
+      - name: Create + push tag v${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }} to PyPI"
+          git push origin "v${{ inputs.version }}"
+      - name: Publish to PyPI (trusted publishing via OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Repository URL defaults to https://upload.pypi.org/legacy/ — no
+          # `repository-url` override needed. For TestPyPI we'd override it.
+          packages-dir: dist/
+          print-hash: true
+        # ── Alternative if you prefer API token over trusted publishing ──
+        # Replace the step above with this and add PYPI_API_TOKEN to secrets:
+        #
+        # - name: Publish to PyPI (twine + API token)
+        #   env:
+        #     TWINE_USERNAME: __token__
+        #     TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        #   run: |
+        #     python -m pip install --upgrade twine
+        #     python -m twine upload --non-interactive --verbose dist/*
+      - name: Summary
+        run: |
+          {
+            echo "### PyPI release ✅"
+            echo ""
+            echo "- Version: \`${{ inputs.version }}\`"
+            echo "- Tag: \`v${{ inputs.version }}\`"
+            echo "- URL: https://pypi.org/project/paper-research-agent/${{ inputs.version }}/"
+            echo ""
+            echo "Install with:"
+            echo ""
+            echo '```bash'
+            echo "pipx install paper-research-agent==${{ inputs.version }}"
+            echo "# or simply: pipx install paper-research-agent"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
