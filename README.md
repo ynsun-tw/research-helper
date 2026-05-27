@@ -1,9 +1,15 @@
 # Research Agent
 
-Local-first conversational CLI for research paper understanding, critical
-discussion, and literature intelligence. Multi-agent (Analyst + Critic +
-Searcher + MemoryKeeper) with explicit slash commands **and** LLM tool
-calling — pick whichever feels natural per turn.
+Local-first conversational research companion. **Just talk to it** —
+the agent has function-calling access to the full toolbox (paper
+search + analysis, debate, writing, figures, self-plagiarism scan,
+style training, config, environment diagnostics). Slash commands and
+Typer subcommands are still there as fast paths and scripting hooks,
+but the recommended way to drive Research Agent is plain English (or
+Chinese — `language: zh`).
+
+Multi-agent under the hood: Analyst + Critic + Scribe + Illustrator
++ Searcher + MemoryKeeper, all local.
 
 ## Requirements
 
@@ -152,18 +158,63 @@ All local state lives under `~/.research-agent/`: `memory.db` (SQLite),
 ## Usage
 
 Running `research` with no arguments drops you into the conversational
-REPL. Everything else happens inside it.
+REPL. **Plain English is the primary interface.** Slash commands are
+fast shortcuts for power users; Typer subcommands exist so you can
+script Research Agent into CI / cron / shell pipelines.
 
 ```bash
-research                                       # enter the REPL
-research config set api_key sk-or-...          # the only remaining subcommand
-research --help
+research                                       # enter the conversational shell
+research config set api_key sk-or-...          # bootstrap (or `set_config` inside)
+research --help                                # full subcommand reference (scripting)
 ```
 
-Inside the REPL you can either type **slash commands** for explicit
-control or **plain text** to let the LLM pick the right tool.
+### Natural language → tools
 
-### Slash commands
+Plain text is sent to the LLM, which has function-calling access to
+the entire backend. The agent picks the right tool, chains them if
+needed, and surfaces a concise answer. Examples:
+
+| What you type | What it triggers |
+|---|---|
+| `搜一下 sparse attention 的最新综述` | `search_arxiv` |
+| `read the BERT paper I searched last week` | `recent_searches` → `load_paper` |
+| `what did we conclude about positional encodings last month?` | `recall_history` |
+| `who built on this paper?` | `get_citations` on the anchor paper |
+| `save this for later` (after a search) | `queue_add` |
+| `what's on my reading list?` | `queue_list` |
+| `read the next one` | `queue_next` → `load_paper` |
+| `is my environment OK?` | `run_doctor` |
+| `is my style trained?` | `style_show` |
+| `import my last two arxiv papers as style samples: 2305.14314, 2301.07041` | (confirms first, then) `train_style` |
+| `build the fingerprint` | (confirms, then) `build_fingerprint` |
+| `draft me an introduction in ~300 words about sparse top-k attention` | `draft_section` |
+| `give me a TikZ diagram of a three-layer encoder` | `draft_figure` |
+| `save version B to ~/intro.md` | `save_draft_to_file` |
+| `does this overlap with anything I've published?` | `check_self_plagiarism` against the latest draft |
+| `tighten this and address the issues` | `revise_draft` |
+| `set the model to anthropic/claude-3.5-sonnet` | (confirms, then) `set_config` |
+| `how am I doing this month?` | `research_insights` |
+
+**State-mutating tools** (`train_style`, `build_fingerprint`,
+`update_fingerprint`, `set_config`) are gated by a prompt-level
+contract: the agent will summarise the exact action and ask for
+confirmation before writing anything. Confirm or veto in natural
+language; nothing hits disk until you say yes.
+
+The full list of tools registered for the agent: `search_arxiv`,
+`recent_searches`, `recall_history`, `load_paper`, `discuss_idea`,
+`save_current_idea`, `list_ideas`, `queue_add`, `queue_list`,
+`queue_next`, `get_citations`, `get_references`,
+`suggest_search_refinement`, `research_insights`, `run_doctor`,
+`style_show`, `style_history`, `draft_section`, `draft_figure`,
+`save_draft_to_file`, `check_self_plagiarism`, `revise_draft`,
+`train_style`, `build_fingerprint`, `update_fingerprint`,
+`get_config`, `set_config`.
+
+### Slash commands (fast paths)
+
+If you prefer explicit control or want to skip an LLM round-trip,
+every slash invokes the same backend directly:
 
 | Command | What it does |
 |---|---|
@@ -208,25 +259,6 @@ a "Shelved idea(s) may have an unblock" banner whenever a new paper
 mentions one — letting search results pull an idea back into your
 attention automatically.
 
-### Natural language → tools
-
-Plain text is sent to the LLM, which has function-calling access to the
-backend. Available tools:
-
-`search_arxiv`, `recent_searches`, `recall_history`, `load_paper`,
-`discuss_idea`, `save_current_idea`, `list_ideas`, `queue_add`,
-`queue_list`, `queue_next`, `get_citations`, `get_references`,
-`suggest_search_refinement`, `research_insights`.
-
-The model is instructed to chain them: `"open the BERT paper I searched
-last week"` → `recent_searches` → `load_paper`. `"read the next one on my
-list"` → `queue_next` → `load_paper`. `"what did we conclude about
-positional encodings?"` → `recall_history` then a synthesized recap.
-`"who built on this paper?"` → `get_citations` on the anchor paper.
-`"what does this paper rely on?"` → `get_references`.
-`"what should I search next?"` → `suggest_search_refinement` →
-`search_arxiv`. `"how am I doing this month?"` → `research_insights`.
-
 ## Quick start (5 minutes)
 
 ```bash
@@ -235,54 +267,82 @@ pipx install paper-research-agent
 #  or  →  pip install paper-research-agent
 #  or  →  pip install -e ".[dev]" from the repo root for a dev install
 
-# 2. Verify (no API key needed yet)
-research --version            # → research-agent 0.5.1
-research doctor               # → environment health check (config, DB, disk, chromadb)
-
-# 3. Configure
+# 2. Configure
 research config set api_key sk-or-...     # OpenRouter key from https://openrouter.ai/keys
 research config set language zh           # or en (default)
 
-# 4. Drive the REPL
-research                                  # enter the conversational shell
-# inside the REPL:
-›  /search efficient transformer long context
-›  /read 1706.03762
-›  /discuss replace dense attention with top-k sparse attention
-›  /idea save sparse-attention
-›  /exit
-
-# 5. Author with Scribe
-research style train arxiv:2305.14314 arxiv:2301.07041   # learn your voice
-research style fingerprint                                # build the fingerprint
-research write introduction --context "sparse top-k attention" --output intro.md
-research review intro.md --section introduction --interactive
-
-# 6. Diagrams
-research figure --type architecture --desc "three-layer sparse encoder"
-research figure --type result --data "ours 85, baseline 80" --verify
-
-# 7. Sanity checks
-research check intro.md       # self-plagiarism scan against your training corpus
-research insights --since 30d # Markdown rollup of recent activity
+# 3. Drop into the shell and just talk
+research
 ```
 
-If anything looks off, `research doctor` prints a single Rich table
-with every check, its status, and a one-line hint. Set
-`RESEARCH_AGENT_DEBUG=1` to see the full Python traceback when an
-unexpected error fires (otherwise you only get one coloured line).
+Inside the REPL, an end-to-end research session looks like this —
+plain English the whole way:
 
 ```text
-› /search --mode applied efficient transformer long context
-› /queue add 1706.03762 Attention Is All You Need
-› /read 1706.03762
-› /discuss replace dense attention with top-k sparse attention for 32k contexts
-› /idea save sparse-routing-attention
-› /ideas update <id-prefix> --status shelved --condition "FlashAttention-3 release"
-› /refine                                    # ask Searcher for the next query
-› /insights --since 30d                      # weekly research review
-› /exit
+You>  is my setup OK?
+→ calling run_doctor()
+[diagnostic table prints]
+Everything is healthy.
+
+You>  search for efficient transformer long context, applied bias
+→ calling search_arxiv(query=efficient transformer long context, mode=applied)
+[scored hits]
+
+You>  read paper 2305.14314 and tell me the punchline
+→ calling load_paper(source=2305.14314)
+[Analyst + Critic summary]
+
+You>  let's debate replacing dense attention with sparse top-k for 32k contexts
+→ calling discuss_idea(idea=…)
+
+You>  import my last two arxiv papers as style training samples: 2305.14314, 2301.07041
+"I'll re-import these 2 papers into the style corpus, replacing any prior
+samples for them. OK to proceed?"
+You>  yes
+→ calling train_style(sources=[arxiv:2305.14314, arxiv:2301.07041], append=false)
+
+You>  now compute the fingerprint
+→ calling build_fingerprint()
+
+You>  draft me an introduction (~300 words) about sparse top-k attention
+→ calling draft_section(section=introduction, context=…, versions=3)
+[3 panels rendered]
+
+You>  version B is the keeper — save it to ~/intro.md
+→ calling save_draft_to_file(path=~/intro.md, kind=section, version=B)
+
+You>  any overlap with my own past work?
+→ calling check_self_plagiarism(target=latest:introduction:B)
+
+You>  tighten this and address the issues
+→ calling revise_draft(target=latest:introduction:B)
+[issue list + revised draft]
+
+You>  save the revision to ~/intro_revised.md
+→ calling save_draft_to_file(path=~/intro_revised.md, kind=revision)
+
+You>  /exit
 ```
+
+The slash form is available for every step if you prefer explicit
+control (`/search`, `/read`, `/discuss`, `/idea save`, `/queue add`,
+`/insights --since 30d`, …). See [Slash commands](#slash-commands-fast-paths).
+
+If you'd rather script Research Agent — cron job, CI artifact, batch
+PDF import — every CLI subcommand still works headlessly:
+
+```bash
+research style train --dir ~/papers
+research style fingerprint
+research write introduction --context "..." --output drafts/intro.md
+research review drafts/intro.md --section introduction --output drafts/intro.review.md
+research check drafts/intro.md --output reports/intro.similarity.md
+research insights --since 30d --output reports/activity.md
+research doctor
+```
+
+The Typer surface is exactly the chat tools' inverse: every CLI verb
+has a same-named chat tool, and vice versa.
 
 See [`examples/end-to-end-demo.md`](examples/end-to-end-demo.md) for a
 full scripted walkthrough that exercises every feature (search →
@@ -290,12 +350,28 @@ relevance scoring → queue → read → citation graph → two-phase debate →
 parked-idea alerts → activation conditions → dynamic refinement →
 cross-session recall → research insights) on a real paper.
 
-## Writing assistant (M4, in progress)
+## Writing assistant
 
-Train the upcoming Scribe agent on your own published papers so it
-writes in a voice that actually sounds like yours. Today the M4
-surface covers **sample import** (S4.1.1); fingerprint analysis +
-draft generation + writing-review pipeline land in subsequent stories.
+Train Scribe on your own published papers so it writes in a voice
+that sounds like yours, then drive the whole writing flow from chat
+(natural language) or from CLI (scripting). The two surfaces are
+strictly equivalent — pick the one that fits your workflow.
+
+| Chat tool | CLI command | What it does |
+|---|---|---|
+| `train_style(sources?, directory?, append?)` | `research style train …` | Import paragraphs from your papers into the corpus |
+| `build_fingerprint()` | `research style fingerprint` | Compute the style vector from the corpus |
+| `update_fingerprint()` | `research style update` | Recompute, folding in accepted revisions, archive old version |
+| `style_show()` | `research style show` | Corpus summary + fingerprint status |
+| `style_history()` | `research style history` | List archived fingerprint versions |
+| `draft_section(section, context?, versions?, check_against?)` | `research write <section> …` | Scribe drafts N variants |
+| `draft_figure(figure_type, description, data?, verify?)` | `research figure --type … --desc …` | Illustrator generates figure code |
+| `check_self_plagiarism(target, threshold?)` | `research check <file>` | Self-overlap scan (no LLM) |
+| `revise_draft(target, section?)` | `research review <file>` | Analyst+Critic+Scribe auto-revision |
+| `save_draft_to_file(path, kind?, …)` | (built into `--output` on the CLI side) | Persist a cached draft to disk |
+
+The CLI sections below document the underlying flags; everything they
+take is also exposed as a chat-tool argument with the same semantics.
 
 ```bash
 # Pull paragraphs from a folder of PDFs

@@ -19,6 +19,12 @@
 如果你只想看英文版的完整 slash/工具调用清单，参见
 [`end-to-end-demo.md`](./end-to-end-demo.md)。
 
+> **2026-05 后**：Research Agent 把全部能力都暴露成 LLM 工具，
+> 自然语言可以直接触发。下面的场景给出的是"显式 slash 命令"路径，
+> 是因为输出形态最确定、最适合作为参考。如果你想看自然语言怎么走完
+> 同一条路径，往下翻到[**附录 A — 全自然语言版**](#附录-a--全自然语言版)；
+> 两条路径背后调用的是同一套工具。
+
 ---
 
 ## 人物：研究员小李
@@ -737,3 +743,98 @@ fingerprint 想保留就别删 `style/`。
 
 如果你的工作流踩到这两块需求，可以在 issue 里留言；本里程碑的代码框架
 （subprocess 验证、隔离环境抽象、Rich 渲染分层）已经为后续接入留好位置。
+
+---
+
+## 附录 A — 全自然语言版
+
+上面 A/B/C/D 四个场景每一步都对应一个 chat 工具调用。如果不想记
+slash，把上面四节合并成一段连贯对话，效果完全一样：
+
+```text
+$ research
+
+You> 帮我先看下环境正不正常
+→ run_doctor()
+[诊断表格]
+All checks passed.
+
+You> 搜一下高效注意力机制相关的理论论文，最近一年的
+→ search_arxiv(query="efficient attention long context", mode="theoretical")
+[评分后的论文表]
+
+You> 把这几篇都加进待读队列
+→ queue_add(arxiv_id="...", title="...")  (重复多次)
+
+You> 把第一篇读完然后告诉我关键贡献
+→ queue_next() → load_paper(source="...")
+[Analyst + Critic 报告]
+
+You> 我想讨论一下：用 top-k 稀疏注意力加学习路由替代 dense attention
+→ discuss_idea(idea="...")
+[结构化首轮辩论]
+
+You> 把这个 idea 存下来，标题就叫 sparse-routing-attention
+→ save_current_idea(title="sparse-routing-attention")
+
+You> 看一眼这篇论文的引用图谱，谁基于它做了后续工作？
+→ get_citations(arxiv_id="...")
+
+You> 我的写作风格训过了吗？
+→ style_show()
+"Style corpus is empty. Suggest train_style first."
+
+You> 把我自己的两篇论文当样本：~/papers/li-2023-sparse-routing.pdf,
+    ~/papers/li-2024-attention-cache.pdf
+"我会把这 2 个 PDF 解析成段落写入 style_samples 表，会覆盖这两篇之前的
+样本。可以吗？"
+You> 可以
+→ train_style(sources=[...], append=false)
+[导入统计]
+
+You> 现在算指纹
+→ build_fingerprint()
+
+You> 帮我写一段 introduction，主题是稀疏 top-k 注意力支持 32k 上下文，
+    大概 300 字
+→ draft_section(section="introduction", context="...", target_words=300)
+[3 个变体面板]
+
+You> B 版本最好，存到 ~/drafts/intro.md
+→ save_draft_to_file(path="~/drafts/intro.md", kind="section",
+                     section="introduction", version="B")
+
+You> 这段跟我自己以前发过的论文有没有重复？
+→ check_self_plagiarism(target="latest:introduction:B")
+[相似度报告]
+
+You> 帮我再改一遍，让它更紧凑、把 Critic 的几个点都顾到
+→ revise_draft(target="latest:introduction:B")
+[issue 列表 + 修改后版本]
+
+You> 满意，存到 ~/drafts/intro_revised.md
+→ save_draft_to_file(path="~/drafts/intro_revised.md", kind="revision")
+
+You> 给方法部分准备一张 TikZ 架构图：三层 encoder + 路由层
+→ draft_figure(figure_type="architecture",
+               description="three-layer encoder with learned routing")
+[2 个 TikZ 草稿]
+
+You> 第一版好，写到 ~/figs/arch.md
+→ save_draft_to_file(path="~/figs/arch.md", kind="figure",
+                     figure_type="architecture", version="A")
+
+You> 这周做了啥？给个 30 天的回顾
+→ research_insights(since_days=30)
+[Markdown 报告]
+
+You> 等会重新打开 REPL，把 fingerprint 更新一下，把刚刚的 revision 也学进去
+→ update_fingerprint()
+
+You> /exit
+```
+
+这里**唯一**写到磁盘的瞬间，是用户明确说 "存到 …" 时的
+`save_draft_to_file`。draft 本身一直留在 session 内存里。
+任何带 *state-mutating* 注记的工具（`train_style`、`build_fingerprint`、
+`update_fingerprint`、`set_config`）调用前 agent 都会先口头确认。

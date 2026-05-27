@@ -106,6 +106,33 @@
 - **未做**: LangGraph 编排写作流水线、OpenTelemetry 可观测性 — 这两条建议作为后续可选改进保留，不在本次范围。
 - **后续可选演进**: 当主用模型（DeepSeek 等）稳定支持 OpenAI 风格 `response_format={"type": "json_schema"}` 时，可在 `LLMProvider.chat` 加 opt-in 参数走原生 structured outputs，schema 本身不需要改 — 这是 ADR-007 设计时刻意留出的演进口子。
 
+### ADR-008: 全功能迁移到 agent 工具层（Post-M5）
+- **状态**: 已决定（2026-05）
+- **触发**: ADR-006 已把交互入口从多 Typer 子命令收敛到单一 REPL，但 M4/M5 后续添加的写作流水线（`research write` / `figure` / `check` / `review`）、`style` 子命令、`config` 读写、`doctor` 诊断仍然只挂在 Typer CLI 下。在 REPL 内"我现在装的语料够吗？""帮我改一下 intro"等自然语言意图无法触发对应能力——用户必须退出 REPL → 跑 CLI 命令 → 再回到 REPL，对话定位被打断。
+- **决策**: 在保留 Typer 子命令作为 scripting 入口的前提下（D1），把现有 CLI 的每一个动词在 `chat/tools.py` 注册为 LLM 工具，让自然语言可以触达全部能力。分三批落地（Phase 1/2/3），按副作用风险从低到高排队。
+- **选型权衡**:
+  - 是否删掉 Typer 子命令：否（D1）。`research insights --since 30d -o report.md` 等 cron / CI 场景仍有价值，破坏性变更收益不足。
+  - 状态变更工具是否在工具层加二段确认（write a confirmation token，二次调用才执行）：否（D3）。改用 prompt 指令要求 LLM 先口头确认。代码省 ~200 行、可逆破坏面有限（样本可重训、config 可重写、fingerprint 有 archive 备份），承担"模型偶尔不遵守"的尾部风险。
+  - `revise_draft` 是否在 REPL 里复刻 CLI 的 `--interactive` y/N 流程：否（T-2.5）。chat 里没有合适的 prompt-toolkit UI；改为自动 revise + 把 issue 列表 plain-print 由用户后续追问。
+  - draft 缓存位置：session 内存而非 DB。生命周期与 REPL 一致；落盘是 `save_draft_to_file` 的唯一职责，杜绝 LLM 自作主张写文件。
+- **实现要点**:
+  - 三个 session 缓存槽：`recent_drafts: dict[section, list[Draft]]` / `recent_figures: dict[type, list[FigureDraft]]` / `recent_revisions: dict[section, Draft]`，由 `draft_section` / `draft_figure` / `revise_draft` 填充。
+  - 统一引用语法 `latest` / `latest:<section>` / `latest:<section>:<version>`，供 `check_against` / `target` 等参数复用；解析集中在 `_parse_latest_ref` + `_resolve_latest_draft` + `_resolve_check_targets`。需要 path 接口（如 `cli_write.check_against`）时把 latest 内容 spill 到 per-call 的 `tempfile.mkdtemp` 再清理。
+  - **Phase 1（只读）**：`run_doctor` / `style_show` / `style_history`（外加既有的 `research_insights`），共 11 个测试。
+  - **Phase 2（写作 pipeline）**：`draft_section` / `draft_figure` / `save_draft_to_file` / `check_self_plagiarism` / `revise_draft`，共 25 个测试。`save_draft_to_file` 是磁盘写入的唯一入口；其他工具一律只缓存。
+  - **Phase 3（状态变更）**：`train_style` / `build_fingerprint` / `update_fingerprint` / `get_config` / `set_config`，共 18 个测试。`set_config` 在返回字符串里强制 mask `api_key`，避免模型回显 secret。
+  - `CHAT_SYSTEM_PROMPT` 同步增加 13 个工具描述 + 显式规则：no auto-save、style_show 用作 fingerprint 存在性检查、`revise_draft` 不假装人工判断、所有 **STATE-MUTATING** 工具调用前必须先 paraphrase + 询问 + 等待用户首肯。
+- **影响**:
+  - REPL 用户可以全程不退出做完"装样本 → 算指纹 → 写 intro → 查重 → 修订 → 保存 → 巡检"全链路。
+  - Typer 子命令零行为变化，scripting 场景不受影响。
+  - 工具层共 13 个新工具、+54 个单元测试、+0 个新依赖；`chat/tools.py` 从 ~1900 行涨到 ~2900 行，仍可单文件维护。
+- **代价/风险**:
+  - LLM 不遵守"先确认再调用 STATE-MUTATING 工具"的提示时，可能直接覆盖 fingerprint 或 config。已通过 prompt 反复强调 + `update_fingerprint` 会归档旧版本兜底，但仍存在用户被打断的可能。需要在 Phase 4 集成测试 + 人肉 C 阶段验证抽样确认 prompt 的命中率。
+  - 长任务（draft_section 多并行 LLM 调用）目前没有流式进度反馈，REPL 里只能看到 `console.status("Thinking…")`；用户体验上"卡 30 秒没反应"。后续可引入 per-variant 阶段性 print。
+  - `set_config` 改 api_key / model / base_url 不会重建 session 内的 LLMClient，本 session 仍走旧客户端；返回串里已明示需要重启 REPL，但用户可能忽略。
+- **未做**: slash 命令在 Phase 2/3 没补全（写作类只通过自然语言路径触发）；写作流水线在 REPL 里没有 cancel / 中断机制；多个 figure type 共存时的 save 默认值选择策略只做了"二选一报错"，没做更智能的优先级。
+- **后续可选演进**: 加上 `draft_section` 的流式进度、slash 快捷路径（`/write` `/figure` `/check` `/review` `/save-draft`）、`set_config` 后热重载 LLMClient、把 draft 缓存可选落盘到 SQLite 让跨 session 持续可用。
+
 ### ADR-006: CLI 改为对话式 REPL（M2.5）
 - **状态**: 已决定（2026-05）
 - **触发**: 多子命令工具（`research read` / `discuss -p ...` / `ideas ...`）每条命令独立完成一次任务后退出，与"研究合作研究员"的对话定位不符；论文锚定/idea 状态/记忆等会话状态在子命令之间没有自然承载。

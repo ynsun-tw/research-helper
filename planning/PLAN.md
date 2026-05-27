@@ -51,8 +51,11 @@
 | ID | 标题 | 日期 | 状态 | 详情 |
 |----|------|------|------|------|
 | R-001 | Agent JSON 解析迁移到 Pydantic v2 schemas | 2026-05 | DONE | [notes.md](notes.md) ADR-007 |
+| R-002 | 全功能迁移到 agent 工具层（自然语言入口） | 2026-05 | DONE | [notes.md](notes.md) ADR-008 |
 
 R-001 摘要：6 个 agent 的 11 个 `extract_json` 调用点全部迁移到 `research_agent/agents/schemas.py` 的 Pydantic v2 模型 + 单一入口 `parse_model(raw, Model)`。`agents/base.py::extract_json` 删除；`pydantic>=2.7` 升为直接依赖；新增 21 个 contract 测试锁定容错语义；CLI 启动时间与覆盖率不变。
+
+R-002 摘要：在 `chat/tools.py` 注册 13 个新 LLM 工具，把 `research write/figure/check/review` 全套写作流水线 + `style train/fingerprint/update/show/history` + `config get/set` + `doctor` 全部以自然语言入口暴露给 REPL agent；Typer 子命令保留作 scripting 入口（D1）。session 引入 `recent_drafts` / `recent_figures` / `recent_revisions` 三个内存槽缓存中间产物，`save_draft_to_file` 是唯一磁盘写入入口（D6）。状态变更类工具不在工具层硬控（D3），靠 system prompt 让 LLM 先 paraphrase + 等用户确认。+54 单元测试，零新依赖。
 
 ---
 
