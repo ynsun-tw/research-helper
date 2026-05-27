@@ -7,7 +7,11 @@
 #   2. test    — pytest (Py 3.11 + 3.12) with --cov-fail-under=80.
 #   3. build   — python -m build + twine check; upload dist artifact.
 #   4. ⏸ manual approval gate (via `environment: testpypi-release`).
-#   5. publish — tag v<version> on the release commit + twine upload to TestPyPI.
+#   5. publish — twine upload to TestPyPI. Does NOT create a git tag —
+#                permanent `v<version>` tags are reserved for the
+#                production release-pypi.yml workflow, so TestPyPI
+#                smoke-tests don't lock the version number for a later
+#                real release.
 #
 # One-time GitHub setup:
 #   - Settings → Secrets and variables → Actions → New repository secret
@@ -36,7 +40,7 @@ on:
         type: string
 
 permissions:
-  contents: write  # publish job needs this to push the v<version> tag
+  contents: read  # TestPyPI workflow no longer pushes git tags
 
 # Don't queue two release runs at once; a stuck approval shouldn't block
 # the second attempt forever, but we want serial behaviour.
@@ -129,7 +133,7 @@ jobs:
           retention-days: 7
 
   publish:
-    name: Tag + publish to TestPyPI
+    name: Publish to TestPyPI
     needs: build
     runs-on: ubuntu-latest
     # ⏸ Manual gate. GitHub will pause this job and require a reviewer
@@ -138,19 +142,13 @@ jobs:
     environment:
       name: testpypi-release
       url: https://test.pypi.org/project/paper-research-agent/${{ inputs.version }}/
+    # NOTE: TestPyPI releases intentionally do NOT create git tags any
+    # more. Permanent `v<version>` tags are owned by the production
+    # release-pypi.yml workflow — TestPyPI is a smoke-test channel and
+    # tagging from here would block a later PyPI release of the same
+    # version. See release-pypi.yml for the tag-creating workflow.
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Need full history so we can detect existing tags.
-          fetch-depth: 0
-      - name: Refuse to overwrite an existing tag
-        run: |
-          set -euo pipefail
-          tag="v${{ inputs.version }}"
-          if git rev-parse "$tag" >/dev/null 2>&1; then
-            echo "::error::Tag $tag already exists. Bump the version and try again."
-            exit 1
-          fi
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -159,13 +157,6 @@ jobs:
         with:
           name: dist-${{ inputs.version }}
           path: dist/
-      - name: Create + push tag v${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }} to TestPyPI"
-          git push origin "v${{ inputs.version }}"
       - name: Upload to TestPyPI
         env:
           TWINE_USERNAME: __token__
@@ -179,8 +170,7 @@ jobs:
           {
             echo "### TestPyPI release ✅"
             echo ""
-            echo "- Version: \`${{ inputs.version }}\`"
-            echo "- Tag: \`v${{ inputs.version }}\`"
+            echo "- Version: \`${{ inputs.version }}\` (no git tag created — that's the PyPI workflow's job)"
             echo "- URL: https://test.pypi.org/project/paper-research-agent/${{ inputs.version }}/"
             echo ""
             echo "Install with:"
