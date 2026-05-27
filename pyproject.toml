@@ -50,6 +50,15 @@ dependencies = [
     # so the package can run on Python 3.9 / 3.10. Already a transitive
     # dep via pydantic, listed explicitly here for clarity.
     "typing-extensions>=4.0",
+    # PEP 604 (`X | Y` union syntax) is only natively evaluable on 3.10+.
+    # We use `from __future__ import annotations` everywhere, but Pydantic
+    # still calls `get_type_hints()` at runtime when building model
+    # schemas — which `eval`s those annotation strings. On 3.9 that eval
+    # blows up with "Unable to evaluate type annotation 'str | None'".
+    # `eval_type_backport` installs an import hook that backports PEP 604
+    # evaluation to 3.9. Pydantic v2 detects it automatically. Not needed
+    # on 3.10+.
+    "eval_type_backport>=0.2.0; python_version < '3.10'",
 ]
 
 [project.urls]
