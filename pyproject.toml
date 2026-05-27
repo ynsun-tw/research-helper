@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paper-research-agent"
-version = "0.5.1"
+version = "0.5.2"
 description = "Local-first multi-agent CLI for paper understanding, critical debate, literature intelligence, Scribe-powered writing, and figure generation."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
-    { name = "Yanan Sun", email = "yanan.sun.external@tkelevator.com" },
+    { name = "Yanan Sun", email = "sunyanan891114@gmail.com" },
 ]
 keywords = [
     "arxiv",
