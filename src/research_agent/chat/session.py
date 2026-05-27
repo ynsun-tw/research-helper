@@ -14,8 +14,10 @@ from dataclasses import dataclass, field
 from rich.console import Console
 
 from research_agent.agents.debate import DebateHistory
+from research_agent.agents.illustrator import FigureDraft
 from research_agent.agents.memory_keeper import MemoryKeeper
 from research_agent.agents.orchestrator import Orchestrator
+from research_agent.agents.scribe import Draft
 from research_agent.agents.searcher import Searcher
 from research_agent.config import Config
 from research_agent.core.llm import LLMProvider
@@ -60,6 +62,15 @@ class ChatSession:
     last_search_query: str = ""
     debate: DebateHistory = field(default_factory=DebateHistory)
     max_context_tokens: int = 8000
+
+    # Writing-pipeline caches populated by draft_section / draft_figure /
+    # revise_draft tools (Phase 2). Keyed by canonical section / figure
+    # type so the LLM can resolve "the latest intro" without remembering
+    # version ids. Saving to disk is a separate, explicit tool call so
+    # nothing here ever hits the filesystem unless the user asks.
+    recent_drafts: dict[str, list[Draft]] = field(default_factory=dict)
+    recent_figures: dict[str, list[FigureDraft]] = field(default_factory=dict)
+    recent_revisions: dict[str, Draft] = field(default_factory=dict)
 
     @classmethod
     def create(

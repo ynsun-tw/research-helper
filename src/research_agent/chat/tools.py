@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+import shutil
+import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from rich.table import Table
@@ -21,7 +24,9 @@ from rich.table import Table
 from research_agent.agents.analyst import AnalysisResult
 from research_agent.agents.critic import CritiqueResult
 from research_agent.agents.debate import DebateHistory, DebateResult, FollowUpResult
+from research_agent.agents.illustrator import FigureDraft
 from research_agent.agents.meta_memory import MetaMemory
+from research_agent.agents.scribe import Draft
 from research_agent.agents.searcher import SearchSuggestion
 from research_agent.chat.session import ChatSession
 from research_agent.cli_ideas import run_ideas_list, run_ideas_show, run_ideas_update
@@ -1847,6 +1852,847 @@ def _ideas_update(session: ChatSession, tokens: list[str]) -> None:
         conditions=conditions or None,
         clear_conditions=clear_conditions,
     )
+
+
+# ---------------------------------------------------------- writing pipeline
+#
+# Phase 2 tools (draft / figure / check / revise / save) push every
+# CLI writing operation into the agent loop. Key design rules:
+#
+# * Heavy LLM calls (draft / figure / revise) cache their bouquet in
+#   ``session.recent_drafts`` / ``recent_figures`` / ``recent_revisions``.
+#   This lets follow-up tools refer to "latest" without the user
+#   remembering version ids.
+# * The filesystem is touched in exactly one place: ``save_draft_to_file``.
+#   No tool here silently writes drafts to disk.
+# * ``latest`` / ``latest:<section>`` / ``latest:<section>:<version>``
+#   is the canonical reference syntax shared by ``draft_section``'s
+#   ``check_against``, ``check_self_plagiarism``'s ``target``, and
+#   ``revise_draft``'s ``target``. Resolution lives in
+#   ``_resolve_latest_text`` so the rules stay in one place.
+
+
+def _truncate(body: str, *, limit: int = 400) -> str:
+    body = (body or "").strip()
+    if len(body) <= limit:
+        return body
+    return body[: limit - 1].rstrip() + "…"
+
+
+def _parse_latest_ref(ref: str) -> tuple[str | None, str | None]:
+    """Parse ``latest`` / ``latest:<section>`` / ``latest:<section>:<version>``.
+
+    Returns ``(section, version)`` with ``None`` meaning "any / first".
+    Non-``latest`` strings yield ``(None, None)`` so callers can fall
+    back to path-based resolution.
+    """
+    parts = ref.split(":")
+    if not parts or parts[0].strip().lower() != "latest":
+        return (None, None)
+    section = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
+    version = parts[2].strip().upper() if len(parts) > 2 and parts[2].strip() else None
+    return (section, version)
+
+
+def _resolve_latest_draft(
+    session: ChatSession, ref: str
+) -> tuple[str, str, str] | None:
+    """Pull text for a ``latest[:section[:version]]`` reference.
+
+    Returns ``(section, version, text)`` or ``None`` if the cache
+    cannot satisfy the ref. Resolution rules:
+
+    * ``latest`` alone → first cached section, first version.
+    * ``latest:<section>`` → that section, first version.
+    * ``latest:<section>:<version>`` → exact match.
+    """
+    from research_agent.agents.scribe import normalize_section
+
+    section_ref, version_ref = _parse_latest_ref(ref)
+    if section_ref is None and version_ref is None and not ref.lower().startswith(
+        "latest"
+    ):
+        return None
+    if not session.recent_drafts:
+        return None
+    if section_ref is None:
+        section_key = next(iter(session.recent_drafts))
+    else:
+        try:
+            section_key = normalize_section(section_ref)
+        except ValueError:
+            return None
+        if section_key not in session.recent_drafts:
+            return None
+    bouquet = session.recent_drafts[section_key]
+    if not bouquet:
+        return None
+    if version_ref is None:
+        chosen = bouquet[0]
+    else:
+        match = [d for d in bouquet if d.version.upper() == version_ref]
+        if not match:
+            return None
+        chosen = match[0]
+    return (section_key, chosen.version, chosen.text)
+
+
+def _resolve_check_targets(
+    session: ChatSession, raws: list[str], tmpdir: Path
+) -> tuple[list[Path], list[str]]:
+    """Resolve ``check_against`` items to Paths and return (paths, errors)."""
+    paths: list[Path] = []
+    errors: list[str] = []
+    for raw in raws:
+        if not raw or not raw.strip():
+            continue
+        raw = raw.strip()
+        if raw.lower().startswith("latest"):
+            resolved = _resolve_latest_draft(session, raw)
+            if resolved is None:
+                errors.append(
+                    f"could not resolve '{raw}' — no cached drafts (call "
+                    f"draft_section first)"
+                )
+                continue
+            section, version, text = resolved
+            tmp_path = tmpdir / f"latest_{section}_{version}.md"
+            tmp_path.write_text(text, encoding="utf-8")
+            paths.append(tmp_path)
+        else:
+            p = Path(raw).expanduser()
+            if not p.exists():
+                errors.append(f"file not found: {p}")
+                continue
+            paths.append(p)
+    return paths, errors
+
+
+def _format_draft_summary(section: str, drafts: list[Draft]) -> str:
+    """One-paragraph summary the LLM can read after a draft tool call."""
+    if not drafts:
+        return f"Scribe produced no drafts for {section}."
+    lines = [f"Drafted {len(drafts)} variant(s) of `{section}`:"]
+    for d in drafts:
+        excerpt = _truncate(d.text, limit=240)
+        lines.append(
+            f"- Version {d.version} ({d.variant_label}, ~{d.word_count} words): "
+            f"{excerpt}"
+        )
+    lines.append(
+        "Cached in session. Ask to save a specific version with "
+        "save_draft_to_file (or run check_self_plagiarism / revise_draft "
+        "against 'latest:' refs)."
+    )
+    return "\n".join(lines)
+
+
+def _format_figure_summary(figure_type: str, drafts: list[FigureDraft]) -> str:
+    if not drafts:
+        return f"Illustrator produced no drafts for {figure_type}."
+    lines = [f"Drafted {len(drafts)} variant(s) of `{figure_type}` figure:"]
+    for d in drafts:
+        head = (
+            f"- Version {d.version} ({d.style_label or 'no label'}, "
+            f"{d.code_language})"
+        )
+        if d.target_model:
+            head += f", target={d.target_model}"
+        lines.append(head)
+        if d.notes:
+            lines.append(f"  notes: {_truncate(d.notes, limit=140)}")
+        lines.append(f"  code size: {len(d.code)} chars")
+    lines.append(
+        "Cached in session. Use save_draft_to_file(kind='figure', "
+        "figure_type=…) to write them out."
+    )
+    return "\n".join(lines)
+
+
+@register_llm_tool(
+    "draft_section",
+    _function_schema(
+        "draft_section",
+        "Have Scribe draft a paper section in the user's voice. Generates "
+        "N variants in parallel (default 3) and caches them in the "
+        "session under the canonical section name. Use when the user "
+        "asks 'draft an intro', 'write a related work section', etc. "
+        "The drafts are NOT persisted to disk — surface a few-sentence "
+        "preview, and call save_draft_to_file only when the user "
+        "explicitly asks to save.",
+        {
+            "section": {
+                "type": "string",
+                "description": (
+                    "Target section: abstract, introduction, related_work, "
+                    "method, results, discussion, conclusion. Aliases like "
+                    "'intro' / 'methods' / 'experiments' are accepted."
+                ),
+            },
+            "context": {
+                "type": "string",
+                "description": (
+                    "Free-form research context the Scribe should ground "
+                    "the draft in. Will also trigger related-idea + "
+                    "discussion recall from the user's memory store."
+                ),
+            },
+            "target_words": {
+                "type": "integer",
+                "description": "Target word count per draft (±20%). Default 300.",
+                "minimum": 50,
+                "maximum": 2000,
+            },
+            "versions": {
+                "type": "integer",
+                "description": "Number of stylistic variants (1-5). Default 3.",
+                "minimum": 1,
+                "maximum": 5,
+            },
+            "check_against": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Existing drafts the Scribe should stay consistent "
+                    "with. Each item is either a file path or a `latest` "
+                    "ref ('latest', 'latest:<section>', "
+                    "'latest:<section>:<version>') pointing at a draft "
+                    "already in the session cache."
+                ),
+            },
+        },
+        required=["section"],
+    ),
+)
+def exec_draft_section(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.agents.scribe import normalize_section
+    from research_agent.cli_write import run_write
+
+    raw_section = str(args.get("section") or "").strip()
+    if not raw_section:
+        return "Error: section is required."
+    try:
+        section = normalize_section(raw_section)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    context = str(args.get("context") or "")
+    target_words = int(args.get("target_words") or 300)
+    versions = int(args.get("versions") or 3)
+    if not 1 <= versions <= 5:
+        return "Error: versions must be between 1 and 5."
+    check_against_raw = args.get("check_against") or []
+    if not isinstance(check_against_raw, list):
+        return "Error: check_against must be an array of strings."
+    check_against_strs = [str(x) for x in check_against_raw]
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="rabot-draft-"))
+    try:
+        paths, errors = _resolve_check_targets(
+            session, check_against_strs, tmpdir
+        )
+        if errors:
+            return "Error resolving check_against:\n" + "\n".join(
+                f"- {e}" for e in errors
+            )
+        try:
+            result = run_write(
+                session.cfg,
+                session.console,
+                section=section,
+                context=context,
+                check_against=paths or None,
+                target_words=target_words,
+                versions=versions,
+                output=None,
+                parallel=True,
+            )
+        except LLMError as exc:
+            return f"Error from Scribe: {exc}"
+
+        session.recent_drafts[result.section] = list(result.drafts)
+        return _format_draft_summary(result.section, result.drafts)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@register_llm_tool(
+    "draft_figure",
+    _function_schema(
+        "draft_figure",
+        "Have Illustrator generate code for a figure: TikZ "
+        "(architecture), matplotlib/seaborn Python (result), or a "
+        "text-to-image prompt (concept). Produces N variants in "
+        "parallel and caches them. Use when the user asks 'draw a "
+        "diagram of …', 'plot accuracy vs baseline', 'give me a "
+        "DALL-E prompt for …'. Optional ``verify`` actually runs each "
+        "Python draft in a subprocess (only meaningful for result "
+        "figures).",
+        {
+            "figure_type": {
+                "type": "string",
+                "description": (
+                    "architecture | result | concept. Aliases "
+                    "'pipeline', 'plot', 'schematic' are accepted."
+                ),
+            },
+            "description": {
+                "type": "string",
+                "description": "Free-form description of what to draw.",
+            },
+            "data": {
+                "type": "string",
+                "description": (
+                    "Quantitative payload for result figures, e.g. "
+                    "'accuracy: 85% (ours) vs 80% (baseline)'."
+                ),
+            },
+            "versions": {
+                "type": "integer",
+                "description": "Number of variants (1-4). Default 2.",
+                "minimum": 1,
+                "maximum": 4,
+            },
+            "verify": {
+                "type": "boolean",
+                "description": (
+                    "If true and figure_type=result, actually run each "
+                    "Python draft (30s timeout, Agg backend) and report "
+                    "success/failure. No effect otherwise."
+                ),
+            },
+        },
+        required=["figure_type", "description"],
+    ),
+)
+def exec_draft_figure(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.agents.illustrator import normalize_figure_type
+    from research_agent.cli_figure import run_figure
+
+    raw_type = str(args.get("figure_type") or "").strip()
+    description = str(args.get("description") or "").strip()
+    if not raw_type:
+        return "Error: figure_type is required."
+    if not description:
+        return "Error: description is required."
+    try:
+        figure_type = normalize_figure_type(raw_type)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    data = str(args.get("data") or "")
+    versions = int(args.get("versions") or 2)
+    if not 1 <= versions <= 4:
+        return "Error: versions must be between 1 and 4."
+    verify = bool(args.get("verify") or False)
+
+    try:
+        result = run_figure(
+            session.cfg,
+            session.console,
+            figure_type=figure_type,
+            description=description,
+            data=data,
+            versions=versions,
+            output=None,
+            verify=verify,
+            parallel=True,
+        )
+    except LLMError as exc:
+        return f"Error from Illustrator: {exc}"
+
+    session.recent_figures[result.figure_type] = list(result.drafts)
+    summary = _format_figure_summary(result.figure_type, result.drafts)
+    if result.verifications:
+        ok = sum(1 for v in result.verifications if v.ok)
+        fail = len(result.verifications) - ok
+        summary += f"\nVerification: {ok} passed, {fail} failed."
+    return summary
+
+
+@register_llm_tool(
+    "save_draft_to_file",
+    _function_schema(
+        "save_draft_to_file",
+        "Persist a cached Scribe / Illustrator draft (or a revision) to "
+        "a Markdown file. This is the ONLY tool that writes drafts to "
+        "disk — every other writing tool keeps results in session "
+        "memory. Use after the user reviews the draft preview and says "
+        "'save it', 'write it to <path>', or 'export the revision'.",
+        {
+            "path": {
+                "type": "string",
+                "description": (
+                    "Destination path. ~ is expanded; parent dirs are "
+                    "created. .md suffix recommended."
+                ),
+            },
+            "kind": {
+                "type": "string",
+                "enum": ["section", "figure", "revision"],
+                "description": (
+                    "What to save: section (Scribe draft), figure "
+                    "(Illustrator draft), or revision (output of "
+                    "revise_draft). If omitted, inferred from cache "
+                    "when unambiguous."
+                ),
+            },
+            "section": {
+                "type": "string",
+                "description": (
+                    "Section name (canonical or alias). Required for "
+                    "kind=section/revision when multiple sections are "
+                    "cached; otherwise inferred."
+                ),
+            },
+            "figure_type": {
+                "type": "string",
+                "description": (
+                    "Figure type. Required for kind=figure when "
+                    "multiple are cached; otherwise inferred."
+                ),
+            },
+            "version": {
+                "type": "string",
+                "description": (
+                    "Specific variant letter (A/B/C/...). If omitted, "
+                    "saves the whole bouquet. Ignored for kind=revision."
+                ),
+            },
+        },
+        required=["path"],
+    ),
+)
+def exec_save_draft_to_file(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.agents.illustrator import normalize_figure_type
+    from research_agent.agents.scribe import normalize_section
+    from research_agent.cli_figure import _persist_drafts as persist_figures
+    from research_agent.cli_write import _persist_drafts as persist_sections
+
+    raw_path = str(args.get("path") or "").strip()
+    if not raw_path:
+        return "Error: path is required."
+    out_path = Path(raw_path).expanduser()
+    kind = str(args.get("kind") or "").strip().lower()
+
+    if not kind:
+        n_sections = len(session.recent_drafts)
+        n_figures = len(session.recent_figures)
+        n_revisions = len(session.recent_revisions)
+        present = [k for k, n in (
+            ("section", n_sections),
+            ("figure", n_figures),
+            ("revision", n_revisions),
+        ) if n]
+        if not present:
+            return (
+                "Error: nothing in the session cache to save. Run "
+                "draft_section / draft_figure / revise_draft first."
+            )
+        if len(present) > 1:
+            return (
+                "Error: cache holds " + ", ".join(present)
+                + ". Please specify kind (section|figure|revision)."
+            )
+        kind = present[0]
+
+    if kind == "section":
+        return _save_section(session, args, out_path, normalize_section,
+                             persist_sections)
+    if kind == "figure":
+        return _save_figure(session, args, out_path, normalize_figure_type,
+                            persist_figures)
+    if kind == "revision":
+        return _save_revision(session, args, out_path, normalize_section)
+    return f"Error: unknown kind {kind!r}. Use section, figure, or revision."
+
+
+def _save_section(
+    session: ChatSession,
+    args: dict[str, Any],
+    out_path: Path,
+    normalize: Callable[[str], str],
+    persist: Callable[[Path, str, list[Draft]], None],
+) -> str:
+    if not session.recent_drafts:
+        return "Error: no section drafts in cache. Call draft_section first."
+    section_raw = str(args.get("section") or "").strip()
+    if section_raw:
+        try:
+            section = normalize(section_raw)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        if section not in session.recent_drafts:
+            return (
+                f"Error: no cached draft for section {section!r}. "
+                f"Available: {', '.join(sorted(session.recent_drafts))}."
+            )
+    elif len(session.recent_drafts) == 1:
+        section = next(iter(session.recent_drafts))
+    else:
+        return (
+            "Error: multiple sections cached "
+            f"({', '.join(sorted(session.recent_drafts))}); specify section."
+        )
+    bouquet = session.recent_drafts[section]
+    version = str(args.get("version") or "").strip().upper()
+    if version:
+        match = [d for d in bouquet if d.version.upper() == version]
+        if not match:
+            available = ", ".join(d.version for d in bouquet)
+            return (
+                f"Error: no version {version!r} for {section!r}. "
+                f"Available: {available}."
+            )
+        chosen = [match[0]]
+    else:
+        chosen = list(bouquet)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    persist(out_path, section, chosen)
+    session.console.print(
+        f"[green]✓[/green] Wrote {len(chosen)} draft(s) to [bold]{out_path}[/bold]"
+    )
+    return (
+        f"Saved {len(chosen)} {section} draft(s)"
+        + (f" (version {version})" if version else "")
+        + f" to {out_path}."
+    )
+
+
+def _save_figure(
+    session: ChatSession,
+    args: dict[str, Any],
+    out_path: Path,
+    normalize: Callable[[str], str],
+    persist: Callable[[Path, str, str, list[FigureDraft], list[Any]], None],
+) -> str:
+    if not session.recent_figures:
+        return "Error: no figure drafts in cache. Call draft_figure first."
+    type_raw = str(args.get("figure_type") or "").strip()
+    if type_raw:
+        try:
+            figure_type = normalize(type_raw)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        if figure_type not in session.recent_figures:
+            return (
+                f"Error: no cached figure for type {figure_type!r}. "
+                f"Available: {', '.join(sorted(session.recent_figures))}."
+            )
+    elif len(session.recent_figures) == 1:
+        figure_type = next(iter(session.recent_figures))
+    else:
+        return (
+            "Error: multiple figure types cached "
+            f"({', '.join(sorted(session.recent_figures))}); specify "
+            "figure_type."
+        )
+    bouquet = session.recent_figures[figure_type]
+    version = str(args.get("version") or "").strip().upper()
+    if version:
+        match = [d for d in bouquet if d.version.upper() == version]
+        if not match:
+            available = ", ".join(d.version for d in bouquet)
+            return (
+                f"Error: no version {version!r} for {figure_type!r}. "
+                f"Available: {available}."
+            )
+        chosen = [match[0]]
+    else:
+        chosen = list(bouquet)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    persist(out_path, figure_type, "(from chat)", chosen, [])
+    session.console.print(
+        f"[green]✓[/green] Wrote {len(chosen)} figure draft(s) to "
+        f"[bold]{out_path}[/bold]"
+    )
+    return (
+        f"Saved {len(chosen)} {figure_type} figure draft(s)"
+        + (f" (version {version})" if version else "")
+        + f" to {out_path}."
+    )
+
+
+def _save_revision(
+    session: ChatSession,
+    args: dict[str, Any],
+    out_path: Path,
+    normalize: Callable[[str], str],
+) -> str:
+    if not session.recent_revisions:
+        return (
+            "Error: no revisions in cache. Call revise_draft first to "
+            "create one."
+        )
+    section_raw = str(args.get("section") or "").strip()
+    if section_raw:
+        try:
+            section = normalize(section_raw)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        if section not in session.recent_revisions:
+            return (
+                f"Error: no cached revision for {section!r}. Available: "
+                f"{', '.join(sorted(session.recent_revisions))}."
+            )
+    elif len(session.recent_revisions) == 1:
+        section = next(iter(session.recent_revisions))
+    else:
+        return (
+            "Error: multiple revisions cached "
+            f"({', '.join(sorted(session.recent_revisions))}); specify section."
+        )
+    revision = session.recent_revisions[section]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    body = (
+        f"# Revised {section}\n\n"
+        f"_~{revision.word_count} words "
+        f"(target {revision.target_words})_\n\n"
+        f"{revision.text}\n"
+    )
+    out_path.write_text(body, encoding="utf-8")
+    session.console.print(
+        f"[green]✓[/green] Wrote revision to [bold]{out_path}[/bold]"
+    )
+    return f"Saved revised {section} to {out_path}."
+
+
+@register_llm_tool(
+    "check_self_plagiarism",
+    _function_schema(
+        "check_self_plagiarism",
+        "Scan a draft against the user's own published-work corpus to "
+        "flag accidental self-duplication. Paragraph-level TF-IDF + "
+        "cosine similarity, no LLM call. Use after a draft is complete "
+        "or when the user worries about overlap with their prior work.",
+        {
+            "target": {
+                "type": "string",
+                "description": (
+                    "Either a path to a draft file, or a `latest` ref "
+                    "('latest', 'latest:<section>', "
+                    "'latest:<section>:<version>') resolving against the "
+                    "session draft cache."
+                ),
+            },
+            "threshold": {
+                "type": "number",
+                "description": (
+                    "Cosine similarity threshold in (0, 1]. Paragraphs "
+                    "at or above this similarity get flagged. Default "
+                    "0.4."
+                ),
+                "minimum": 0.01,
+                "maximum": 1.0,
+            },
+        },
+        required=["target"],
+    ),
+)
+def exec_check_self_plagiarism(
+    session: ChatSession, args: dict[str, Any]
+) -> str:
+    from research_agent.cli_check import run_check
+
+    raw_target = str(args.get("target") or "").strip()
+    if not raw_target:
+        return "Error: target is required."
+    threshold_raw = args.get("threshold")
+    try:
+        threshold = float(threshold_raw) if threshold_raw is not None else 0.4
+    except (TypeError, ValueError):
+        return "Error: threshold must be a number in (0, 1]."
+    if not 0.0 < threshold <= 1.0:
+        return "Error: threshold must be in (0, 1]."
+
+    draft_text = ""
+    draft_path: Path | None = None
+    if raw_target.lower().startswith("latest"):
+        resolved = _resolve_latest_draft(session, raw_target)
+        if resolved is None:
+            return (
+                f"Error: could not resolve {raw_target!r} — no cached "
+                "drafts. Run draft_section first."
+            )
+        _, _, draft_text = resolved
+    else:
+        candidate = Path(raw_target).expanduser()
+        if not candidate.exists():
+            return f"Error: file not found: {candidate}."
+        draft_path = candidate
+
+    try:
+        result = run_check(
+            session.cfg,
+            session.console,
+            draft_path=draft_path,
+            draft_text=draft_text,
+            threshold=threshold,
+            output=None,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    report = result.report
+    if report.is_clean:
+        return (
+            f"Self-plagiarism check clean: {report.draft_paragraph_count} "
+            f"paragraph(s) scanned, no matches at or above "
+            f"{report.threshold:.0%} similarity."
+        )
+    sample = report.matches[:3]
+    lines = [
+        f"Self-plagiarism check flagged {len(report.matches)} match(es) at "
+        f"or above {report.threshold:.0%} (out of "
+        f"{report.draft_paragraph_count} paragraphs).",
+        "Top hits:",
+    ]
+    for m in sample:
+        para_excerpt = _truncate(m.draft_paragraph, limit=160)
+        lines.append(
+            f"- [{m.similarity:.0%}] vs {m.source_id}: {para_excerpt}"
+        )
+    if len(report.matches) > len(sample):
+        lines.append(f"... and {len(report.matches) - len(sample)} more.")
+    return "\n".join(lines)
+
+
+@register_llm_tool(
+    "revise_draft",
+    _function_schema(
+        "revise_draft",
+        "Run the auto-review pipeline (Analyst + Critic in parallel, "
+        "then Scribe rewrites). NON-INTERACTIVE: the Scribe addresses "
+        "every reviewer issue automatically; the issue list is "
+        "returned to you so the user can see what changed. The "
+        "revised draft is cached in session.recent_revisions[section]; "
+        "save it with save_draft_to_file(kind='revision'). Does not "
+        "touch the disk or the draft_revisions table.",
+        {
+            "target": {
+                "type": "string",
+                "description": (
+                    "Either a path to the draft file, or a `latest` ref. "
+                    "When using a path, also pass `section` so the "
+                    "reviewers know which prompts to apply."
+                ),
+            },
+            "section": {
+                "type": "string",
+                "description": (
+                    "Section name (abstract / introduction / ...). "
+                    "Required when target is a path; inferred when "
+                    "target is a `latest:<section>` ref."
+                ),
+            },
+            "target_words": {
+                "type": "integer",
+                "description": (
+                    "Target word count for the revision. Default: "
+                    "match the original draft's length."
+                ),
+                "minimum": 50,
+                "maximum": 2000,
+            },
+        },
+        required=["target"],
+    ),
+)
+def exec_revise_draft(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.agents.scribe import normalize_section
+    from research_agent.cli_review import run_review
+
+    raw_target = str(args.get("target") or "").strip()
+    if not raw_target:
+        return "Error: target is required."
+    section_raw = str(args.get("section") or "").strip()
+    try:
+        target_words = int(args.get("target_words") or 0)
+    except (TypeError, ValueError):
+        return "Error: target_words must be a positive integer."
+
+    draft_text = ""
+    draft_path: Path | None = None
+    section: str | None = None
+    if raw_target.lower().startswith("latest"):
+        resolved = _resolve_latest_draft(session, raw_target)
+        if resolved is None:
+            return (
+                f"Error: could not resolve {raw_target!r} — no cached "
+                "drafts."
+            )
+        section, _, draft_text = resolved
+    else:
+        candidate = Path(raw_target).expanduser()
+        if not candidate.exists():
+            return f"Error: file not found: {candidate}."
+        draft_path = candidate
+
+    if section is None:
+        if not section_raw:
+            return (
+                "Error: section is required when target is a path; pass "
+                "section='introduction' (or similar)."
+            )
+        try:
+            section = normalize_section(section_raw)
+        except ValueError as exc:
+            return f"Error: {exc}"
+    elif section_raw:
+        # latest ref already supplied section; if user passes one too,
+        # normalize it and prefer the explicit value as an override.
+        try:
+            section = normalize_section(section_raw)
+        except ValueError as exc:
+            return f"Error: {exc}"
+
+    try:
+        result = run_review(
+            session.cfg,
+            session.console,
+            draft_path=draft_path,
+            draft_text=draft_text,
+            section=section,
+            target_words=target_words,
+            output=None,
+            interactive=False,
+            save=False,
+        )
+    except (ValueError, LLMError) as exc:
+        return f"Error from review pipeline: {exc}"
+
+    session.recent_revisions[section] = result.reviewed.revised
+
+    analyst = result.reviewed.analyst_review
+    critic = result.reviewed.critic_review
+    lines = [
+        f"Revised `{section}` via Analyst + Critic + Scribe.",
+        f"- Original: {result.reviewed.original.word_count} words.",
+        f"- Revised: {result.reviewed.revised.word_count} words.",
+    ]
+    if analyst is not None:
+        lines.append(
+            f"- Analyst flagged {len(analyst.issues)} issue(s), "
+            f"{len(analyst.suggestions)} suggestion(s)."
+        )
+    if critic is not None:
+        lines.append(
+            f"- Critic flagged {len(critic.issues)} issue(s), "
+            f"{len(critic.suggestions)} suggestion(s)."
+        )
+    if analyst and analyst.issues:
+        lines.append("Analyst issues:")
+        for item in analyst.issues[:5]:
+            lines.append(f"  - {_truncate(item, limit=180)}")
+    if critic and critic.issues:
+        lines.append("Critic issues:")
+        for item in critic.issues[:5]:
+            lines.append(f"  - {_truncate(item, limit=180)}")
+    lines.append(
+        "Cached as the latest revision; save with "
+        "save_draft_to_file(kind='revision', section='" + section + "', "
+        "path='<path>')."
+    )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------- diagnostics
