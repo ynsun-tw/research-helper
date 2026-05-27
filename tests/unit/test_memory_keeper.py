@@ -190,8 +190,7 @@ def test_check_associations_respects_limit(config_dir) -> None:
     )
     assert len(associations) == 3
     # Sorted by similarity descending.
-    from itertools import pairwise
-    for prev, curr in pairwise(associations):
+    for prev, curr in zip(associations, associations[1:]):
         assert prev.similarity >= curr.similarity
     db.close()
 
