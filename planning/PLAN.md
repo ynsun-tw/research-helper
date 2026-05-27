@@ -10,8 +10,9 @@
 | M3 | 文献智能搜索 | 3周 | DONE | [m3-literature-intelligence.md](milestones/m3-literature-intelligence.md) |
 | M4 | 论文写作助手 | 2周 | DONE | [m4-writing-assistant.md](milestones/m4-writing-assistant.md) |
 | M5 | 研究自动化与完善 | 4周 | DONE (scope trimmed: E5.3 + E5.4 shipped; E5.1 reproduce + E5.2 full TUI deferred) | [m5-research-automation.md](milestones/m5-research-automation.md) |
+| M6 | 从用户反馈学习（Self-Evolution） | 1.5周 | PLANNED | [m6-self-evolution.md](milestones/m6-self-evolution.md) |
 
-**总计**: ~12周（3个月，兼职开发）
+**总计**: ~13.5周（M1–M5 已完成 ~12 周；M6 待开始）
 
 ---
 
@@ -41,6 +42,10 @@
 | E5.2 | TUI 完整界面 | M5 | DEFERRED |
 | E5.3 | 图表生成 | M5 | DONE |
 | E5.4 | 全系统优化与打磨 | M5 | DONE |
+| E6.1 | Reviewer-Feedback Aware Critic & Scribe | M6 | PLANNED |
+| E6.2 | Critic 评分校准 | M6 | PLANNED |
+| E6.3 | Searcher 偏好学习 | M6 | PLANNED |
+| E6.4 | 自我进化观测与治理 | M6 | PLANNED |
 
 ---
 
