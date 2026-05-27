@@ -151,3 +151,60 @@
 - **代价/风险**:
   - REPL 单一入口让脚本/管道场景失能；如有 batch 需求，需要在后续里程碑提供 `--prompt`/`--once` 模式
   - LLM tool calling 需要模型支持 OpenAI function-calling；mock provider 已覆盖单元测试，但部分 OpenRouter 模型行为差异需要 e2e 验证
+
+### ADR-009: REPL 输入层改用 prompt_toolkit + LLM 输出流式化（0.6）
+- **状态**: 已决定（2026-05）
+- **触发**: 0.5 系列 REPL 直接用 `rich.console.input`（其本质是 `input()` 加 Rich 渲染），导致：(a) 在 readline 没自动接入的终端（部分 zsh + brew Python、Windows ConPTY、tmux/screen 嵌套）回退键 / 方向键打印的是字面量字符，无法行编辑；(b) 没有跨会话历史 / Tab 补全 / Ctrl+R 反搜，"我上周 search 过的那个" 只能重新打字；(c) 用户问"画一张稀疏注意力的架构图，并用 200 字介绍它"这类大问题时，模型可能 30 秒不返回任何字符，体感像卡死。
+- **决策**: 用 `prompt_toolkit ≥ 3.0` 接管 REPL 输入；同时给 `LLMProvider` 加一条流式带工具调用的接口，让最终文本 token-by-token 打到 console。
+- **选型权衡**:
+  - 输入层：`prompt_toolkit` vs 仅 `readline`/`pyreadline3`。前者跨平台一致（macOS libedit / Linux readline / Windows ConPTY 全覆盖）且自带 history / completer / keybinding API；后者在 Windows 上需要单独打包。选 `prompt_toolkit`。
+  - 流式接口：(A) 新方法 `chat_with_tools_stream` 走 callback 注入文本 chunk、最终返回完整 `ChatResponse`；(B) 把 `chat_with_tools` 改成可选 `stream=True` 参数；(C) 让 `chat_with_tools` 始终走流式内部累积。选 A——保持向后兼容、callback 签名简单、Mock provider 可以零开销地一次回调全文。
+  - 渲染：要不要在流式过程中保留 Rich Markdown 渲染？否。Rich Markdown 必须拿到完整字符串才能渲染（headers、表格、code fence 边界），与 token-by-token 输出不兼容。让步：流式期间渲染纯文本，必要时让用户在 `/history` 里看 Markdown 渲染过的版本（slash 输出仍走 Rich）。
+  - tty 检测：CliRunner / 管道（`echo … | research`）没法做光标控制，prompt_toolkit 会立刻 EOF。决策：`sys.stdin.isatty() and sys.stdout.isatty()` 才构造 `PromptSession`；测试与脚本场景走老 `input_fn` 路径，完全不引入 prompt_toolkit 依赖。
+- **实现要点**:
+  - 新增 `chat/prompt_ui.py`：`build_prompt_session(cfg, command_names) -> PromptSession`（`FileHistory(~/.research-agent/repl_history)` + `_SlashCompleter`（仅 `/...` 前缀触发） + Ctrl+L 清屏 keybinding）；`render_state_prompt(session) -> FormattedText`，从 `anchor_paper` 与 `current_idea_id` 渲染 `You(arxiv:... | idea:...)> `。
+  - `core/llm.py`：`LLMProvider.chat_with_tools_stream(messages, *, on_content_delta, tools, tool_choice, temperature, max_tokens) -> ChatResponse`。ABC 默认实现是非流式调用 + 一次性把整段 content 喂给 callback；`LLMClient` 真跑 `stream=True`，按 chunk.index 累积 tool_call 的 partial JSON args；`MockLLMProvider` 沿用非流式行为以保留测试语义。
+  - `chat/router.py`：`run_chat` 只在 tty + 用户没传 `input_fn` 时构造 `PromptSession`；`_read_user_input` 优先 prompt_toolkit、回退 `input_fn`。Ctrl+C 处理升级为两段式：空 buffer 第一次按 → 仅警告 `Press Ctrl+C again to exit`，第二次 → 真退；中间任何成功输入都重置武装位。`?` / `/?` / `help` 在 router 层 rewrite 成 `/help`。
+  - `_chat_with_llm` 拆出 `_stream_one_response`：先打 `…thinking…` 占位，第一个 token 到达时用 `\r` 抹掉、其后所有 token 直接走 `console.file.write`（绕过 Rich 的 line buffering），结束时补一个换行。
+- **影响**:
+  - 行编辑、`↑/↓` 历史、Tab 补 `/-cmd`、Ctrl+R 反搜在所有终端可用；REPL 历史跨会话持久化在 `~/.research-agent/repl_history`。
+  - 用户从输入回车到第一个 token 显示的等待时间从"整段回答 latency"降到"首 token latency"，体感卡顿消失。
+  - 流式期间没有 Markdown 渲染（headers / table / code fence 都按纯文本打），是知情代价。
+  - 测试零改动：所有现有 `input_fn=lambda _: ...` 测试因为 tty 检测而走老路径；`CliRunner.invoke(input=...)` 同理。新加 13 个 unit test 覆盖 `_SlashCompleter` 三种语境、Ctrl+C 武装/重置、流式 callback、`?` 别名、状态 prompt 渲染。
+- **代价/风险**:
+  - 新增运行时依赖 `prompt-toolkit>=3.0`（约 600KB）。已是 IPython / pgcli 的传递依赖，安装面够广。
+  - prompt_toolkit 与 Rich 共用 stdout 时偶有冲突；目前规避方式是流式期间不开 Rich live 渲染。如果未来要恢复 Markdown，需要在流结束后清屏重绘——目前不值得这个复杂度。
+  - 当模型只返回 tool_call 不返回 content 时，"…thinking…" 占位会在 `_cap_tool_result` 介入前消失，用户会看到短暂空白后才出现 `→ calling ...`。可接受。
+- **未做**: 多行输入（Alt+Enter）、命令树补全（`/queue add ?` → arxiv ids）、`undo` 命令撤回最近一对消息。三者都不阻断主路径，留作后续可选。
+
+### ADR-010: Chat 路径 token 预算治理（0.6.1）
+- **状态**: 已决定（2026-05）
+- **触发**: 0.6.0 投产后用实测脚本量化 LLM 调用成本，发现每轮 round-trip 固定 overhead ≈ 7056 tokens（`CHAT_SYSTEM_PROMPT` 2616 + 27 个 tool schemas 4440），而单次"4-tool-call"自然语言对话整体 ≈ 48K tokens。在 DeepSeek $0.27/M input tier 下不致命，但若换 OpenAI / Anthropic 模型立刻不可忍。更关键的是 tool result 没有上限：搜索 20 条 + 论文全文 + 草稿全文等场景下，单条 `role=tool` 消息可达几千 tokens 并随着 agent loop 多轮回灌。
+- **决策**: 六个改动一并落地，按 ROI 排序：
+  1. **O1 系统提示词重写**: 砍掉每个工具的散文式说明（OpenAI schema 字段已经有），只保留 schema 表达不了的 chaining rules / state-mutation 合约 / 输出风格。
+  2. **O2 top-5 fattest schema 精简**: `draft_section` / `draft_figure` / `save_draft_to_file` / `revise_draft` / `train_style` 五个 description 从多句长说明压成单行 + 参数级 hint。
+  3. **O3 tool result 上限截断**: `MAX_TOOL_RESULT_CHARS = 8000`（~2000 tokens）；超长部分截断后附 "N chars elided; re-call with narrower args if needed"，让 LLM 知道可以再要更精细的输入。
+  4. **O4 tool-log 过滤**: tool 结果仍要写入 `WorkingMemory` 留 audit / `/history`，但打 `metadata={"kind": "tool_log"}`；`_build_messages` 跳过这类条目，避免下一轮上下文里再次发送一份 400 字符摘要。
+  5. **O5 history_limit 收紧**: 从 20 降到 8。需要长上下文的查询走 `recall_history` 工具按需召回。
+  6. **O6 token telemetry**: 每轮末尾打印 `[~N in → ~M out tokens · K rounds]`（沿用 `memory/working_memory.py::estimate_tokens` 的 4 chars/token 启发式，无 tiktoken 依赖），让成本可见。
+- **选型权衡**:
+  - 是否引入 tiktoken 做精确计数：否。+800KB 依赖；OpenRouter 跨模型分词器各异，精度没法统一。4 chars/token 估值对趋势已经够用，用户主要关心相对量。
+  - 是否上 prompt caching（Anthropic `cache_control` / OpenRouter 透传）：否，留作 ADR-011 候选。需要按 provider 分支处理 header / 消息分段，工程量大；当前优化先把"无脑节省"的部分吃干。
+  - tool result 超长时是否做 LLM 自动摘要：否。会再开一个 LLM 调用反而花更多钱；让原工具在源头返回更紧凑的结果（如 `search_arxiv(max_results=5)`）才是正解。LLM 看到 elided 标记后会自然倾向更窄的下一次调用。
+  - tool_log 是否完全不写 memory：否，留下做 `/history` 与未来分析。只是排除出 LLM 上下文。
+- **实现要点**:
+  - `chat/router.py` 新增 `MAX_TOOL_RESULT_CHARS` 常量 + `_cap_tool_result(text)` 帮手；agent loop 写 `messages.append(role="tool", content=_cap_tool_result(result_text))`。
+  - `_build_messages` 新增 `eligible = [m for m in messages if m.metadata.get("kind") != "tool_log"]`，按 `history_limit=8` 截取。
+  - 新增 `_estimate_message_tokens` / `_estimate_tools_tokens` / `_print_token_footer`，复用 `memory/working_memory.py::estimate_tokens`。
+  - `CHAT_SYSTEM_PROMPT` 从 ~150 行散文压到 ~50 行，结构化为四段：routing rules / state-mutation rules / output rules / slash 提示。
+- **影响**:
+  - 每轮固定 overhead 7056 → 4453 tokens（-37%）。
+  - 一次典型 4-tool-call 对话从 ~48K tokens → ~23K tokens（-52%）。
+  - tool result 超长时模型不再被海量上下文淹没，更倾向于"重新调一次更精确的工具"。
+  - 用户在 REPL 里能直接看到每轮成本，能感性判断是否值得换更便宜模型。
+- **代价/风险**:
+  - 系统提示词压缩可能让 LLM 偶尔遗漏某个 chaining rule（如先 `style_show` 再 `draft_section`）。已在新增 5 个测试 + 既有 700+ 测试中验证未回归。生产监控点：用户反馈"模型直接乱写没看 fingerprint"。
+  - tool_log 不入下一轮上下文意味着 LLM 不再"记得"之前 tool 调过什么。这是预期行为（要回忆走 `recall_history`），但提示词需要明确告诉模型"如果忘了之前 tool 结果，重新调一次"。当前 prompt 没有显式这一句，依赖 LLM 自然行为；如果实测有问题再加。
+  - 4 chars/token 在中文（每汉字 ≈ 1.5–2 tokens）下偏低估约 40%。footer 里数字是粗略指引，不是计费值。
+- **未做**: prompt caching（ADR-011 候选）、tiktoken 精确计数、tool result 自动摘要、流式期间 cancel LLM 调用。
+- **后续可选演进**: 把 ADR-010 的 `MAX_TOOL_RESULT_CHARS` / `history_limit` 改成 `config.yaml` 字段，让重度用户能在精度 vs 成本之间手动平衡；加 prompt caching 后预计同样 4-tool 对话能再降到 ~10K input tokens。
