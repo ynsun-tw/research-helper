@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from rich.console import Console
 
@@ -54,6 +55,12 @@ class ChatSession:
     searcher: Searcher
     memory: WorkingMemory
 
+    # Production REPL sets this to a prompt_toolkit ``PromptSession`` (built
+    # by ``chat.prompt_ui.build_prompt_session``). Tests and headless flows
+    # leave it ``None`` and rely on ``input_fn`` instead. Typed ``Any`` to
+    # avoid leaking the optional dependency into this module's surface.
+    prompt_session: Any | None = None
+
     anchor_paper: Paper | None = None
     current_idea_id: str | None = None
     idea_seed: str = ""
@@ -81,6 +88,7 @@ class ChatSession:
         *,
         input_fn: Callable[[str], str] | None = None,
         use_chroma: bool | None = None,
+        prompt_session: Any | None = None,
     ) -> ChatSession:
         if input_fn is None:
             input_fn = console.input
@@ -110,6 +118,7 @@ class ChatSession:
             llm=llm,
             console=console,
             input_fn=input_fn,
+            prompt_session=prompt_session,
             db=db,
             discussions=discussions,
             papers=papers,

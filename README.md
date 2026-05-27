@@ -168,6 +168,31 @@ research config set api_key sk-or-...          # bootstrap (or `set_config` insi
 research --help                                # full subcommand reference (scripting)
 ```
 
+### REPL keys
+
+The shell uses [prompt_toolkit](https://python-prompt-toolkit.readthedocs.io/),
+so line editing, history, and search work the same way they do in
+bash / psql / ipython:
+
+| Key | Effect |
+|---|---|
+| `Tab` | Complete `/`-commands |
+| `↑` / `↓` | Walk through history (prefix-matched) |
+| `Ctrl+R` | Reverse history search |
+| `Ctrl+L` | Clear the screen |
+| `Ctrl+A` / `Ctrl+E` | Jump to start / end of line |
+| `Ctrl+C` | Cancel current input; press again on an empty prompt to exit |
+| `Ctrl+D` | Exit (saves the session) |
+| `?` or `/?` | Same as `/help` |
+
+History is persisted across sessions in `~/.research-agent/repl_history`.
+The prompt itself reflects loaded state, e.g.
+`You(arxiv:1706.03762 | idea:9a1f00b3)>`, so you always know which paper
+and idea are active.
+
+LLM replies stream token-by-token (you see text as it's generated, not
+after the whole response finishes).
+
 ### Natural language → tools
 
 Plain text is sent to the LLM, which has function-calling access to

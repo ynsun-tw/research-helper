@@ -46,6 +46,10 @@ dependencies = [
     "openai>=1.30",
     "pyyaml>=6.0",
     "rich>=13.7",
+    # Interactive REPL: history, completion, keybindings, reverse search.
+    # Replaces Rich's plain `console.input` to fix line-editing issues
+    # (backspace/arrows) on terminals where readline isn't wired up.
+    "prompt-toolkit>=3.0",
     # `typing.Self` (3.11+) and friends are sourced from typing_extensions
     # so the package can run on Python 3.9 / 3.10. Already a transitive
     # dep via pydantic, listed explicitly here for clarity.

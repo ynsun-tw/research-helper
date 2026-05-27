@@ -7,7 +7,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 from openai import APIConnectionError, APIStatusError, OpenAI, RateLimitError
 from openai.types.chat import ChatCompletionChunk
@@ -90,6 +90,36 @@ class LLMProvider(ABC):
         """
         text = self.chat(messages, temperature=temperature, max_tokens=max_tokens)
         return ChatResponse(content=text)
+
+    def chat_with_tools_stream(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        on_content_delta: Callable[[str], None] | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] = "auto",
+        temperature: float = 0.6,
+        max_tokens: int | None = None,
+    ) -> ChatResponse:
+        """Streaming variant: call ``on_content_delta(chunk)`` per text chunk.
+
+        Returns the same ``ChatResponse`` as ``chat_with_tools`` once the stream
+        completes (full content + accumulated tool_calls).
+
+        Default implementation does a single non-streaming call and emits the
+        whole content as one callback — backends without real streaming (mocks,
+        old providers) keep working with the same call site.
+        """
+        resp = self.chat_with_tools(
+            messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        if on_content_delta and resp.content:
+            on_content_delta(resp.content)
+        return resp
 
 
 class LLMClient(LLMProvider):
@@ -212,6 +242,86 @@ class LLMClient(LLMProvider):
                 time.sleep(self.base_delay * (2**attempt))
         raise LLMError(_friendly_message(last_error, base_url=self.base_url)) from last_error
 
+    def chat_with_tools_stream(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        on_content_delta: Callable[[str], None] | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] = "auto",
+        temperature: float = 0.6,
+        max_tokens: int | None = None,
+    ) -> ChatResponse:
+        payload = _to_openai_messages(messages)
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": cast(Any, payload),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        if tools:
+            kwargs["tools"] = list(tools)
+            kwargs["tool_choice"] = tool_choice
+
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries):
+            try:
+                stream = self._client.chat.completions.create(**kwargs)
+                content_parts: list[str] = []
+                # OpenAI streams tool_calls as indexed partial deltas:
+                # each chunk may set ``id``/``function.name`` once and append
+                # to ``function.arguments``. We accumulate into a dict keyed
+                # by stream index and finalize at the end.
+                tc_acc: dict[int, dict[str, str]] = {}
+                for chunk in stream:
+                    if not isinstance(chunk, ChatCompletionChunk):
+                        continue
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    text = getattr(delta, "content", None)
+                    if text:
+                        content_parts.append(text)
+                        if on_content_delta is not None:
+                            on_content_delta(text)
+                    raw_tcs = getattr(delta, "tool_calls", None) or []
+                    for tc in raw_tcs:
+                        idx = tc.index if tc.index is not None else 0
+                        entry = tc_acc.setdefault(
+                            idx, {"id": "", "name": "", "arguments": ""}
+                        )
+                        if tc.id:
+                            entry["id"] = tc.id
+                        fn = getattr(tc, "function", None)
+                        if fn is not None:
+                            if getattr(fn, "name", None):
+                                entry["name"] = fn.name or ""
+                            args = getattr(fn, "arguments", None)
+                            if args:
+                                entry["arguments"] += args
+                tcs: list[ToolCall] = []
+                for idx in sorted(tc_acc):
+                    entry = tc_acc[idx]
+                    if not entry["name"]:
+                        continue
+                    tcs.append(
+                        ToolCall(
+                            id=entry["id"] or f"call_{uuid.uuid4().hex[:8]}",
+                            name=entry["name"],
+                            arguments=entry["arguments"] or "{}",
+                        )
+                    )
+                return ChatResponse(
+                    content="".join(content_parts), tool_calls=tuple(tcs)
+                )
+            except (APIConnectionError, RateLimitError, APIStatusError) as exc:
+                last_error = exc
+                if attempt + 1 >= self.max_retries:
+                    break
+                time.sleep(self.base_delay * (2**attempt))
+        raise LLMError(_friendly_message(last_error, base_url=self.base_url)) from last_error
+
 
 class MockLLMProvider(LLMProvider):
     """Deterministic LLM for unit/integration tests.
@@ -278,6 +388,27 @@ class MockLLMProvider(LLMProvider):
         if not self._responses:
             return ChatResponse(content='{"error": "no mock response queued"}')
         return self._responses.pop(0)
+
+    def chat_with_tools_stream(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        on_content_delta: Callable[[str], None] | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] = "auto",
+        temperature: float = 0.6,
+        max_tokens: int | None = None,
+    ) -> ChatResponse:
+        resp = self.chat_with_tools(
+            messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        if on_content_delta and resp.content:
+            on_content_delta(resp.content)
+        return resp
 
 
 def _normalize_response(r: str | ChatResponse) -> ChatResponse:

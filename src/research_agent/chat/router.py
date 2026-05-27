@@ -3,16 +3,27 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable
 
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.panel import Panel
 
 from research_agent.chat.session import ChatSession
 from research_agent.chat.tools import LLM_TOOLS, SLASH_COMMANDS, llm_tool_schemas
 from research_agent.config import Config
-from research_agent.core.llm import ChatMessage, LLMError, LLMProvider, ToolCall
+from research_agent.core.llm import (
+    ChatMessage,
+    ChatResponse,
+    LLMError,
+    LLMProvider,
+    ToolCall,
+)
+
+# ``?`` and ``/?`` are conventional REPL shortcuts for "give me help". We
+# rewrite them to ``/help`` at the input boundary so users don't have to
+# remember the slash form.
+HELP_ALIASES = frozenset({"?", "/?", "help"})
 
 CHAT_SYSTEM_PROMPT = """\
 You are Research Agent, a critical research companion running inside a CLI shell.
@@ -176,10 +187,12 @@ Rules:
 
 INTRO_TEXT = (
     "[bold]Research Agent — conversational shell[/bold]\n\n"
-    "Type [bold]/help[/bold] for commands. Plain text is sent to the LLM with "
-    "the current conversation as context.\n"
+    "Type [bold]/help[/bold] or [bold]?[/bold] for commands. Plain text is "
+    "sent to the LLM with the current conversation as context.\n"
     "Common flow: [cyan]/search <topic>[/cyan] → [cyan]/read <id>[/cyan] → "
     "[cyan]/discuss <your idea>[/cyan].\n"
+    "[dim]Keys: Tab = complete /-commands · ↑/↓ = history · Ctrl+R = "
+    "reverse search · Ctrl+L = clear · Ctrl+C = cancel / exit.[/dim]\n"
     "[bold]/exit[/bold] to leave (session is saved)."
 )
 
@@ -196,24 +209,59 @@ def run_chat(
     opening_message: str | None = None,
 ) -> int:
     """Enter the conversational REPL. Returns process exit code."""
+    # Only build a prompt_toolkit session for real interactive runs. Tests
+    # pass an ``input_fn`` lambda; CliRunner-driven e2e tests pipe stdin
+    # via stdin which prompt_toolkit can't drive (it needs a real tty for
+    # cursor control). In both cases we stay on the plain ``input_fn``
+    # path so there's no terminal handle requirement under pytest.
+    prompt_session = None
+    if input_fn is None and _stdio_is_tty():
+        try:
+            from research_agent.chat.prompt_ui import build_prompt_session
+
+            prompt_session = build_prompt_session(cfg, SLASH_COMMANDS.keys())
+        except Exception:  # pragma: no cover - degrades to console.input
+            prompt_session = None
+
     session = ChatSession.create(
         cfg=cfg,
         llm=llm,
         console=console,
         input_fn=input_fn,
         use_chroma=use_chroma,
+        prompt_session=prompt_session,
     )
     console.print(Panel(INTRO_TEXT, border_style="magenta"))
 
+    # Ctrl+C with an empty buffer no longer kills the session immediately —
+    # the user has to press it twice (or once after typing something we
+    # cancel). This matches the convention in shells and most modern REPLs
+    # so accidental SIGINT doesn't lose unsaved memory.
+    ctrl_c_armed = False
     try:
         if opening_message:
             _process_input(session, opening_message.strip())
         while True:
             try:
-                raw = session.input_fn("[bold cyan]You>[/bold cyan] ").strip()
-            except (KeyboardInterrupt, EOFError):
-                console.print("\n[yellow]Interrupted — saving session…[/yellow]")
+                raw = _read_user_input(session).strip()
+            except KeyboardInterrupt:
+                if ctrl_c_armed:
+                    console.print(
+                        "\n[yellow]Interrupted — saving session…[/yellow]"
+                    )
+                    break
+                console.print(
+                    "[dim]Press Ctrl+C again to exit, or type "
+                    "/exit.[/dim]"
+                )
+                ctrl_c_armed = True
+                continue
+            except EOFError:
+                console.print(
+                    "\n[yellow]EOF received — saving session…[/yellow]"
+                )
                 break
+            ctrl_c_armed = False
             if not raw:
                 continue
             if raw.lower() in EXIT_TOKENS:
@@ -229,7 +277,40 @@ def run_chat(
     return 0
 
 
+def _stdio_is_tty() -> bool:
+    """True only when both stdin and stdout are real terminals.
+
+    prompt_toolkit needs cursor / key control on stdout and reads keys
+    from stdin; piped IO (CliRunner, ``echo … | research``) breaks both,
+    so we fall back to plain ``input_fn`` in those cases.
+    """
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except (AttributeError, ValueError):  # pragma: no cover - stdio closed
+        return False
+
+
+def _read_user_input(session: ChatSession) -> str:
+    """Read one line from the user, preferring prompt_toolkit when present.
+
+    Falls back to ``session.input_fn`` (which tests inject) so unit tests
+    don't need a real tty. The prompt_toolkit path renders a state-aware
+    prompt (anchor paper / active idea) and routes through the configured
+    history + completer.
+    """
+    if session.prompt_session is not None:
+        from research_agent.chat.prompt_ui import render_state_prompt
+
+        result = session.prompt_session.prompt(render_state_prompt(session))
+        return str(result)
+    return session.input_fn("[bold cyan]You>[/bold cyan] ")
+
+
 def _process_input(session: ChatSession, raw: str) -> None:
+    # ``?`` and ``/?`` are help shortcuts users expect from any REPL; rewrite
+    # them before dispatch so they never look like LLM prompts.
+    if raw.strip().lower() in HELP_ALIASES:
+        raw = "/help"
     if raw.startswith("/"):
         _dispatch_slash(session, raw)
     else:
@@ -257,27 +338,28 @@ MAX_TOOL_ITERATIONS = 6
 
 
 def _chat_with_llm(session: ChatSession, user_text: str) -> None:
-    """Run an LLM agent loop: chat → maybe tool_call → execute → loop until text."""
+    """Run an LLM agent loop: chat → maybe tool_call → execute → loop until text.
+
+    The final, no-more-tool-calls reply is streamed token-by-token via
+    ``LLMProvider.chat_with_tools_stream``. Intermediate tool-calling rounds
+    also stream any preamble text (the model occasionally says "let me check
+    the citations…" before a tool call) and then surface a ``→ calling …``
+    line. We deliberately do NOT use ``console.status`` here — the live
+    spinner conflicts with progressive token printing.
+    """
     session.memory.append("user", user_text)
     messages = _build_messages(session)
     tools = llm_tool_schemas() or None
 
     try:
         for _ in range(MAX_TOOL_ITERATIONS):
-            with session.console.status("[bold]Thinking…[/bold]"):
-                response = session.llm.chat_with_tools(
-                    messages,
-                    tools=tools,
-                    tool_choice="auto" if tools else "none",
-                    temperature=0.6,
-                )
+            response = _stream_one_response(session, messages, tools)
             if not response.has_tool_calls:
                 reply = response.content.strip()
                 if not reply:
                     session.console.print("[dim](empty reply)[/dim]")
                     session.memory.messages.pop()
                     return
-                session.console.print(Markdown(reply))
                 session.memory.append("assistant", reply)
                 return
 
@@ -309,6 +391,57 @@ def _chat_with_llm(session: ChatSession, user_text: str) -> None:
         )
     except LLMError as exc:
         session.console.print(f"[red]Error:[/red] {exc}")
+
+
+def _stream_one_response(
+    session: ChatSession,
+    messages: list[ChatMessage],
+    tools: list[dict[str, object]] | None,
+) -> ChatResponse:
+    """One round-trip with progressive content output.
+
+    Prints a single ``Thinking…`` cue, then overwrites it with the first
+    streamed delta. If the model only emits tool_calls (no content), we
+    clear the cue and let the subsequent ``→ calling …`` line take over.
+    Returns the full ``ChatResponse`` once the stream completes so the
+    caller can inspect ``tool_calls`` and ``content``.
+    """
+    file = session.console.file
+    streamed = {"started": False, "chunks": False}
+
+    file.write("\033[2m…thinking…\033[0m")
+    file.flush()
+
+    def on_delta(chunk: str) -> None:
+        if not streamed["started"]:
+            # First chunk: erase the placeholder ("…thinking…" + reset code).
+            # 12 chars of visible text plus the ANSI sequences — overwriting
+            # with a generous \r + spaces handles all common terminal widths.
+            file.write("\r" + " " * 24 + "\r")
+            streamed["started"] = True
+        streamed["chunks"] = True
+        file.write(chunk)
+        file.flush()
+
+    try:
+        response = session.llm.chat_with_tools_stream(
+            messages,
+            tools=tools,
+            tool_choice="auto" if tools else "none",
+            temperature=0.6,
+            on_content_delta=on_delta,
+        )
+    finally:
+        if not streamed["started"]:
+            # No content arrived; clear the placeholder before the next print.
+            file.write("\r" + " " * 24 + "\r")
+            file.flush()
+        if streamed["chunks"]:
+            # Finish the streamed line with a newline so subsequent Rich
+            # output starts at column 0.
+            file.write("\n")
+            file.flush()
+    return response
 
 
 def _execute_tool_call(session: ChatSession, tc: ToolCall) -> str:
