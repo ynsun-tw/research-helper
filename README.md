@@ -50,20 +50,75 @@ pipx install \
 
 ### Option C — From source (development)
 
+Requires Python 3.11 or 3.12. The steps below assume macOS / Linux;
+on Windows replace the `source` line as noted.
+
 ```bash
+# 1. Clone
 git clone https://github.com/ynsun-tw/research-helper.git
 cd research-helper
-pip install -e ".[dev]"
+
+# 2. Create an isolated virtual environment
+python3.11 -m venv .venv
+source .venv/bin/activate
+# Windows PowerShell:  .venv\Scripts\Activate.ps1
+# Windows cmd:         .venv\Scripts\activate.bat
+
+# 3. Editable install with dev extras (pytest, pytest-cov, ruff, mypy, ...)
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 ```
 
-After any of the above, `research --help` should list the writing
-suite (`write`, `review`, `check`, `style`) alongside `config` and
-`insights`, and the conversational REPL is one `research` away.
+Verify the install:
+
+```bash
+research --version            # → research-agent 0.5.1
+python -m pytest -q           # full suite (~10s, 656 tests, no network)
+python -m ruff check src tests
+python -m mypy src/research_agent
+```
+
+If all four are green, you're ready to develop. Configure your
+OpenRouter API key (see [Configure](#configure)) and start the REPL
+with `research`.
+
+#### Day-to-day dev commands
+
+| Task | Command |
+|------|---------|
+| Run only one test file | `python -m pytest tests/unit/test_cli.py -q` |
+| Run one test by keyword | `python -m pytest -k version -q` |
+| Watch coverage (≥80% gate) | `python -m pytest --cov=src/research_agent --cov-report=term-missing --cov-fail-under=80` |
+| Auto-fix lint issues | `python -m ruff check --fix src tests` |
+| Run network-marked tests | `RUN_NETWORK_TESTS=1 python -m pytest -m network` |
+| Surface a traceback on CLI error | `RESEARCH_AGENT_DEBUG=1 research <command>` |
+| Rebuild distributions locally | `python -m build && python -m twine check dist/*` |
+
+#### Repo layout (top-level)
+
+```
+src/research_agent/        # the package (cli.py is the typer entry point)
+  agents/                  # Analyst, Critic, Scribe, Searcher, Illustrator,
+                           # MemoryKeeper + schemas.py (Pydantic v2 outputs)
+  chat/                    # REPL: session, router, slash + LLM tool registry
+  core/                    # LLMProvider, Paper, Idea, debate prompts, language
+  memory/                  # WorkingMemory + token-aware truncation
+  parsers/                 # PyMuPDF PDF parsing
+  prompts/                 # YAML system prompts per agent
+  search/                  # arXiv / Semantic Scholar / GitHub clients
+  storage/                 # SQLite schema + ChromaDB vector store
+  style/                   # writing fingerprint, plagiarism, samples
+tests/{unit,integration,e2e}
+planning/                  # architecture.md, PLAN.md, notes.md (ADRs), milestones/
+examples/                  # usage-scenarios-zh.md
+```
+
+After any of the install options, `research --help` should list the
+writing suite (`write`, `review`, `check`, `style`) alongside `config`
+and `insights`, and the conversational REPL is one `research` away.
 
 > Latest published build: **0.5.1** on PyPI —
 > [project page](https://pypi.org/project/paper-research-agent/0.5.1/).
-> Same code as Test PyPI `0.5.0`; the version was bumped during the
-> migration from Test-PyPI-only to production PyPI distribution.
 
 ## Configure
 
