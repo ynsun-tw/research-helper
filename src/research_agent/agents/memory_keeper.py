@@ -24,7 +24,7 @@ DEFAULT_ASSOCIATION_STATUSES: tuple[IdeaStatus, ...] = ("shelved", "waiting")
 DEFAULT_ASSOCIATION_THRESHOLD = 0.8
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class Association:
     """A historical idea surfaced by check_associations.
 

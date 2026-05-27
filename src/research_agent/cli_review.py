@@ -32,7 +32,7 @@ from research_agent.style.fingerprint import Fingerprint
 PromptFn = Callable[[str], str]
 
 
-@dataclass(slots=True)
+@dataclass
 class SelectionSummary:
     """Records what the user accepted vs rejected in interactive mode."""
 
@@ -42,7 +42,7 @@ class SelectionSummary:
     rejected_suggestions: list[str]
 
 
-@dataclass(slots=True)
+@dataclass
 class ReviewResult:
     reviewed: ReviewedDraft
     selection: SelectionSummary | None = None

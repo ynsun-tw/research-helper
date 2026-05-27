@@ -26,14 +26,14 @@ ALLOWED_TRANSITIONS: dict[IdeaStatus, frozenset[IdeaStatus]] = {
 }
 
 
-@dataclass(slots=True)
+@dataclass
 class ScoreHistoryEntry:
     score: float
     reason: str
     session_id: str = ""
 
 
-@dataclass(slots=True)
+@dataclass
 class Idea:
     id: str
     title: str

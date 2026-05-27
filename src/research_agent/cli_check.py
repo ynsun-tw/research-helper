@@ -20,7 +20,7 @@ from research_agent.style.plagiarism import (
 from research_agent.style.samples import StyleSampleRepository
 
 
-@dataclass(slots=True)
+@dataclass
 class CheckResult:
     report: SimilarityReport
 

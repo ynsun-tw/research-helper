@@ -8,7 +8,7 @@ from research_agent.agents.analyst import IdeaSupportResult
 from research_agent.agents.critic import CritiqueResult
 
 
-@dataclass(slots=True)
+@dataclass
 class DebateResult:
     """Fixed-structure output for Idea debate rounds."""
 
@@ -67,7 +67,7 @@ class DebateResult:
         )
 
 
-@dataclass(slots=True)
+@dataclass
 class FollowUpResult:
     """Prose conclusions for follow-up turns (no structured debate schema)."""
 

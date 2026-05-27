@@ -21,13 +21,13 @@ from research_agent.core.debate_prompts import idea_debate_user_prompt
 from research_agent.core.paper import Paper
 
 
-@dataclass(slots=True)
+@dataclass
 class ClaimedVsEvidence:
     claim: str
     evidence: str
 
 
-@dataclass(slots=True)
+@dataclass
 class AnalysisResult:
     contributions: list[str]
     method_insights: list[str]
@@ -120,7 +120,7 @@ class Analyst(BaseAgent):
         return parse_review("analyst", raw)
 
 
-@dataclass(slots=True)
+@dataclass
 class IdeaSupportResult:
     supports: list[str]
     suggestions: list[str]

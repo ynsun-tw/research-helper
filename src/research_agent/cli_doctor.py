@@ -36,7 +36,7 @@ DISK_FAIL_MB = 100
 DISK_WARN_MB = 500
 
 
-@dataclass(slots=True)
+@dataclass
 class CheckResult:
     name: str
     status: Status

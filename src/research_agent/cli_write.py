@@ -35,7 +35,7 @@ DEFAULT_DISCUSSION_LIMIT = 3
 MAX_DRAFT_EXCERPT_CHARS = 2000
 
 
-@dataclass(slots=True)
+@dataclass
 class WritingContext:
     """Everything we want the Scribe to know besides the fingerprint."""
 
@@ -99,7 +99,7 @@ class WritingContext:
         return "\n".join(parts)
 
 
-@dataclass(slots=True)
+@dataclass
 class WriteResult:
     section: str
     drafts: list[Draft]

@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from research_agent.core.idea import IDEA_STATUSES
 from research_agent.storage.database import Database
@@ -34,7 +34,7 @@ from research_agent.storage.database import Database
 TOP_N = 5
 
 
-@dataclass(slots=True)
+@dataclass
 class InsightsReport:
     """All numbers MetaMemory computes for one report."""
 
@@ -150,7 +150,7 @@ class MetaMemory:
         ``since_days`` filters papers / ideas / discussions by their
         ``created_at`` timestamp. ``None`` returns the all-time picture.
         """
-        now = datetime.now(tz=UTC)
+        now = datetime.now(tz=timezone.utc)
         since_clause = ""
         params: tuple[str, ...] = ()
         period = "all-time"

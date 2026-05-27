@@ -19,7 +19,7 @@ from research_agent.memory.working_memory import DEFAULT_MAX_CONTEXT_TOKENS, Wor
 from research_agent.style.fingerprint import Fingerprint
 
 
-@dataclass(slots=True)
+@dataclass
 class Task:
     """A routed unit of work for one or more agents."""
 
@@ -27,7 +27,7 @@ class Task:
     context: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass
 class AggregatedAnalysis:
     """Dual-perspective paper analysis with consensus and conflict highlights."""
 

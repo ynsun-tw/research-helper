@@ -17,7 +17,7 @@ from research_agent.core.language import DEFAULT_LANGUAGE, response_language_ins
 from research_agent.core.llm import ChatMessage, LLMProvider
 
 
-@dataclass(slots=True)
+@dataclass
 class AgentResponse:
     """Standard agent output envelope."""
 

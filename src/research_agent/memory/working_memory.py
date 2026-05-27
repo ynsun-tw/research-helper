@@ -22,7 +22,7 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // CHARS_PER_TOKEN)
 
 
-@dataclass(slots=True)
+@dataclass
 class MemoryMessage:
     role: str
     content: str

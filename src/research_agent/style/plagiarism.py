@@ -41,7 +41,7 @@ def tokenize(text: str) -> list[str]:
     return [t for t in tokens if len(t) > 2]
 
 
-@dataclass(slots=True)
+@dataclass
 class ParagraphMatch:
     """One draft paragraph that resembles one corpus paragraph."""
 
@@ -52,7 +52,7 @@ class ParagraphMatch:
     similarity: float
 
 
-@dataclass(slots=True)
+@dataclass
 class SimilarityReport:
     """Aggregated detector output."""
 

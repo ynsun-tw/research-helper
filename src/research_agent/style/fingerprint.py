@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
-@dataclass(slots=True)
+@dataclass
 class MacroFingerprint:
     """Section-level structural signals."""
 
@@ -38,7 +38,7 @@ class MacroFingerprint:
     notes: str = ""
 
 
-@dataclass(slots=True)
+@dataclass
 class MicroFingerprint:
     """Statistical signals computed from raw paragraphs."""
 
@@ -55,7 +55,7 @@ class MicroFingerprint:
     type_token_ratio: float = 0.0
 
 
-@dataclass(slots=True)
+@dataclass
 class PersonalMarkers:
     """Surface conventions: how the author labels their figures and cites."""
 
@@ -66,7 +66,7 @@ class PersonalMarkers:
     em_dash_per_100: float = 0.0
 
 
-@dataclass(slots=True)
+@dataclass
 class Fingerprint:
     """The composite style fingerprint persisted to disk."""
 
@@ -128,7 +128,7 @@ class Fingerprint:
                 # overwrite it than crash the update.
                 pass
         if not self.created_at:
-            self.created_at = datetime.now(tz=UTC).isoformat(timespec="seconds")
+            self.created_at = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
         with path.open("w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2, ensure_ascii=False, sort_keys=True)
 

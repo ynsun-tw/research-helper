@@ -11,7 +11,7 @@ from typing import Any
 from research_agent.storage.database import Database
 
 
-@dataclass(slots=True)
+@dataclass
 class DiscussionMessage:
     id: str
     session_id: str

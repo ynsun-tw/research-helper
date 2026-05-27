@@ -24,7 +24,7 @@ from research_agent.style.fingerprint import Fingerprint
 from research_agent.style.samples import StyleSampleRepository
 
 
-@dataclass(slots=True)
+@dataclass
 class StyleTrainResult:
     """Tally returned by :func:`run_style_train`. Useful for tests + chat."""
 

@@ -20,7 +20,7 @@ ALLOWED_STATUSES: frozenset[str] = frozenset(
 )
 
 
-@dataclass(slots=True)
+@dataclass
 class QueueEntry:
     id: str
     arxiv_id: str

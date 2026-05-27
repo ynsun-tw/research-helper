@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from research_agent.storage.database import Database
 
 
-@dataclass(slots=True)
+@dataclass
 class DraftRevision:
     """One (original, revised) pair with the user's selection trace."""
 

@@ -12,7 +12,7 @@ Pins the rollup contract:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -192,7 +192,7 @@ def test_since_days_filters_old_rows(tmp_path) -> None:
     try:
         # Old paper: backdate created_at by 60 days.
         old_ts = (
-            datetime.now(tz=UTC) - timedelta(days=60)
+            datetime.now(tz=timezone.utc) - timedelta(days=60)
         ).strftime("%Y-%m-%d %H:%M:%S")
         papers = PaperRepository(db)
         papers.save(_make_paper("arxiv:old", year=2022))

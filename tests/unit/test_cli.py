@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -186,7 +187,10 @@ def test_version_flag_short() -> None:
 def test_version_matches_pyproject() -> None:
     """``research_agent.__version__`` must mirror the [project] version
     in ``pyproject.toml`` so the CLI and the distribution don't drift."""
-    import tomllib
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:
+        import tomli as tomllib
 
     from research_agent import __version__
 

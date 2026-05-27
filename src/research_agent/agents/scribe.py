@@ -93,7 +93,7 @@ DEFAULT_VARIANTS: tuple[tuple[str, str], ...] = (
 )
 
 
-@dataclass(slots=True)
+@dataclass
 class Draft:
     """One Scribe output. Stable shape across S4.2.x / S4.3.x."""
 

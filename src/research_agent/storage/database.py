@@ -11,7 +11,8 @@ import json
 import sqlite3
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+
+from typing_extensions import Self
 
 from research_agent.core.paper import Paper, Section
 

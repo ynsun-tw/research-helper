@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-@dataclass(slots=True)
+@dataclass
 class Section:
     """A logical section of a paper (e.g. Introduction, Methods)."""
 
@@ -14,7 +14,7 @@ class Section:
     content: str
 
 
-@dataclass(slots=True)
+@dataclass
 class Paper:
     """Structured representation of a research paper.
 

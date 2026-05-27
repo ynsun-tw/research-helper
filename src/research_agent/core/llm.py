@@ -19,7 +19,7 @@ class LLMError(Exception):
     """User-facing LLM failure (no stack trace in CLI)."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ToolCall:
     """One function-call request emitted by the LLM (OpenAI-compatible)."""
 
@@ -28,7 +28,7 @@ class ToolCall:
     arguments: str  # JSON-encoded; parse with ``json.loads`` on the executor side
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ChatMessage:
     """One conversation message, optionally carrying tool-call metadata."""
 
@@ -39,7 +39,7 @@ class ChatMessage:
     name: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ChatResponse:
     """Structured LLM reply: text plus any requested tool calls."""
 

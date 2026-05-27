@@ -42,7 +42,7 @@ SlashHandler = Callable[[ChatSession, str], None]
 LLMExecutor = Callable[[ChatSession, dict[str, Any]], str]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class SlashCommand:
     name: str
     handler: SlashHandler
@@ -50,7 +50,7 @@ class SlashCommand:
     usage: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class LLMTool:
     name: str
     schema: dict[str, Any]

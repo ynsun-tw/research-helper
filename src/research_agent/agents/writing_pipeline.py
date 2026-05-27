@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 REVIEW_ROLES = ("analyst", "critic")
 
 
-@dataclass(slots=True)
+@dataclass
 class WritingReview:
     """One reviewer's verdict on a Scribe draft."""
 
@@ -41,7 +41,7 @@ class WritingReview:
     raw_response: str = ""
 
 
-@dataclass(slots=True)
+@dataclass
 class ReviewedDraft:
     """Full output of the writing-review pipeline."""
 

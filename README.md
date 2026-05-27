@@ -7,7 +7,7 @@ calling — pick whichever feels natural per turn.
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.9+
 - An [OpenRouter](https://openrouter.ai/) API key (any OpenAI-compatible
   endpoint works; OpenRouter is the default)
 
@@ -50,16 +50,16 @@ pipx install \
 
 ### Option C — From source (development)
 
-Requires Python 3.11 or 3.12. The steps below assume macOS / Linux;
-on Windows replace the `source` line as noted.
+Requires Python 3.9, 3.10, 3.11, or 3.12. The steps below assume
+macOS / Linux; on Windows replace the `source` line as noted.
 
 ```bash
 # 1. Clone
 git clone https://github.com/ynsun-tw/research-helper.git
 cd research-helper
 
-# 2. Create an isolated virtual environment
-python3.11 -m venv .venv
+# 2. Create an isolated virtual environment (any 3.9+ Python works)
+python3 -m venv .venv
 source .venv/bin/activate
 # Windows PowerShell:  .venv\Scripts\Activate.ps1
 # Windows cmd:         .venv\Scripts\activate.bat

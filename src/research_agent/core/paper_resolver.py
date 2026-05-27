@@ -153,7 +153,7 @@ VALID_SEARCH_MODES = (
 )
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class ParsedMode:
     """Outcome of parsing a ``--mode`` value. ``warning`` is non-empty
     when the input was unrecognised (caller decides whether to surface)."""

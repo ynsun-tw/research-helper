@@ -38,7 +38,7 @@ from research_agent.core.llm import LLMClient
 VERIFY_TIMEOUT_SECONDS = 30
 
 
-@dataclass(slots=True)
+@dataclass
 class VerifyOutcome:
     """Result of running a single matplotlib draft via subprocess."""
 
@@ -48,7 +48,7 @@ class VerifyOutcome:
     timed_out: bool = False
 
 
-@dataclass(slots=True)
+@dataclass
 class FigureResult:
     figure_type: str
     drafts: list[FigureDraft]

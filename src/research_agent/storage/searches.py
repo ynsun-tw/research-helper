@@ -21,7 +21,7 @@ from research_agent.search.arxiv_search import ArxivSearchHit
 from research_agent.storage.database import Database
 
 
-@dataclass(slots=True)
+@dataclass
 class StoredSearchHit:
     arxiv_id: str
     title: str
@@ -43,7 +43,7 @@ class StoredSearchHit:
         )
 
 
-@dataclass(slots=True)
+@dataclass
 class StoredSearchQuery:
     id: str
     query: str

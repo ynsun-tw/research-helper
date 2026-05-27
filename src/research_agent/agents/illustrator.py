@@ -143,7 +143,7 @@ _CODE_LANGUAGE_BY_TYPE: dict[str, str] = {
 }
 
 
-@dataclass(slots=True)
+@dataclass
 class FigureDraft:
     """One Illustrator output. Stable shape across all 3 figure types."""
 

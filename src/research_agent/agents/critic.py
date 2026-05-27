@@ -23,7 +23,7 @@ from research_agent.core.debate_prompts import idea_debate_user_prompt
 from research_agent.core.paper import Paper
 
 
-@dataclass(slots=True)
+@dataclass
 class CritiqueResult:
     objections: list[str]
     support_score: float

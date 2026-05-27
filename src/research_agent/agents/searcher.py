@@ -25,7 +25,7 @@ from research_agent.search.arxiv_search import ArxivSearchHit
 VALID_MODES = {"theoretical", "applied"}
 
 
-@dataclass(slots=True)
+@dataclass
 class SearchSuggestion:
     """A pivot suggestion derived from the discussion so far.
 

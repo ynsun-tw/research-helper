@@ -29,7 +29,7 @@ class ArxivSearchError(Exception):
     """Raised when arXiv search fails."""
 
 
-@dataclass(slots=True)
+@dataclass
 class ArxivSearchHit:
     """A single paper hit. ``source`` records which engine produced it
     (``arxiv`` or ``semantic_scholar``) so the UI can flag fallbacks.

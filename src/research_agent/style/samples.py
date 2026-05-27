@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from research_agent.storage.database import Database
 
 
-@dataclass(slots=True)
+@dataclass
 class StyleSample:
     """One paragraph of training text + its metadata."""
 
