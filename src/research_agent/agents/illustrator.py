@@ -246,9 +246,10 @@ class Illustrator(BaseAgent):
             raw_outputs = [self._chat(p) for p in prompts]
 
         drafts: list[FigureDraft] = []
-        for version, (label, _directive), raw in zip(
-            versions, variants, raw_outputs, strict=True
-        ):
+        assert len(versions) == len(variants) == len(raw_outputs), (
+            "version/variant/output count mismatch"
+        )
+        for version, (label, _directive), raw in zip(versions, variants, raw_outputs):
             parsed = _parse_figure(raw, figure_type=self._figure_type)
             drafts.append(
                 FigureDraft(
