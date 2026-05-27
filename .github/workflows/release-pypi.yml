@@ -15,36 +15,32 @@
 # Flow:
 #   verify (version match + lint) → test (Py 3.11/3.12, 80% cov) →
 #   build (sdist + wheel + twine check) → ⏸ manual approval gate →
-#   publish (tag v<version> + upload to PyPI via trusted publishing).
+#   publish (tag v<version> + twine upload to PyPI via API token).
 #
 # ============================================================================
 # One-time GitHub + PyPI setup
 # ============================================================================
 #
-# RECOMMENDED: Trusted Publishing (no API token, OIDC-based)
-# ----------------------------------------------------------
-#   1. PyPI → Account settings → Publishing → "Add a new pending publisher"
-#        PyPI Project Name:    paper-research-agent
-#        Owner:                ynsun-tw
-#        Repository name:      research-helper
-#        Workflow name:        release-pypi.yml
-#        Environment name:     pypi-release
-#      After the first successful publish, the "pending" publisher becomes
-#      an "active" trusted publisher.
-#   2. GitHub → Settings → Environments → New environment "pypi-release"
-#        Required reviewers:   <you / your team>
-#        Deployment branches:  Selected branches → main  (recommended)
+#   1. PyPI → Account settings → API tokens → "Add API token"
+#        Token name:  paper-research-agent (anything)
+#        Scope:       "Entire account (all projects)" for the very first
+#                     publish (the project doesn't exist on PyPI yet, so
+#                     project-scoped tokens cannot be issued). After the
+#                     first successful publish, revoke this token and
+#                     create a new one scoped to the `paper-research-agent`
+#                     project, then update the GitHub secret.
+#        Copy the `pypi-...` value — you can only see it once.
 #
-# ALTERNATIVE: API token (if you can't use trusted publishing)
-# ------------------------------------------------------------
-#   1. PyPI → Account settings → API tokens → Add API token (scope:
-#      this project, after first upload, or "Entire account" before it
-#      exists).
-#   2. GitHub → Settings → Secrets and variables → Actions → New secret
-#        Name:  PYPI_API_TOKEN
-#        Value: <pypi-...>
-#   3. Replace the `pypa/gh-action-pypi-publish` step at the bottom of
-#      this file with the commented-out twine block.
+#   2. GitHub → Settings → Secrets and variables → Actions → "New secret"
+#        Name:   PYPI_API_TOKEN
+#        Value:  <the pypi-... token from step 1>
+#
+#   3. GitHub → Settings → Environments → "New environment"
+#        Name:                 pypi-release
+#        Required reviewers:   <you / your team>
+#        Deployment branches:  Selected branches → main   (recommended)
+#      The `publish` job below references this environment and will
+#      pause for human approval before twine uploads.
 
 name: Release to PyPI
 
@@ -178,7 +174,6 @@ jobs:
       url: https://pypi.org/project/paper-research-agent/${{ inputs.version }}/
     permissions:
       contents: write   # push the tag
-      id-token: write   # trusted publishing OIDC token
     steps:
       - uses: actions/checkout@v4
         with:
@@ -203,23 +198,27 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }} to PyPI"
           git push origin "v${{ inputs.version }}"
-      - name: Publish to PyPI (trusted publishing via OIDC)
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: actions/setup-python@v5
         with:
-          # Repository URL defaults to https://upload.pypi.org/legacy/ — no
-          # `repository-url` override needed. For TestPyPI we'd override it.
-          packages-dir: dist/
-          print-hash: true
-        # ── Alternative if you prefer API token over trusted publishing ──
-        # Replace the step above with this and add PYPI_API_TOKEN to secrets:
-        #
-        # - name: Publish to PyPI (twine + API token)
-        #   env:
-        #     TWINE_USERNAME: __token__
-        #     TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        #   run: |
-        #     python -m pip install --upgrade twine
-        #     python -m twine upload --non-interactive --verbose dist/*
+          python-version: "3.11"
+      - name: Refuse to run if PYPI_API_TOKEN is missing
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "${PYPI_API_TOKEN:-}" ]; then
+            echo "::error::PYPI_API_TOKEN secret is not configured. See the setup block at the top of this workflow."
+            exit 1
+          fi
+      - name: Publish to PyPI (twine + API token)
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m pip install --upgrade twine
+          # --verbose prints the uploaded file URLs so the run log records
+          # exactly what landed on PyPI; --non-interactive guards against
+          # twine prompting in CI.
+          python -m twine upload --non-interactive --verbose dist/*
       - name: Summary
         run: |
           {
