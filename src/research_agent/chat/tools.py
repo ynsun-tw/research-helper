@@ -1849,6 +1849,161 @@ def _ideas_update(session: ChatSession, tokens: list[str]) -> None:
     )
 
 
+# ---------------------------------------------------------- diagnostics
+
+
+@slash(
+    "doctor",
+    summary="Run environment health checks (config, DB, Chroma, disk).",
+    usage="/doctor",
+)
+def cmd_doctor(session: ChatSession, args: str) -> None:
+    from research_agent.cli_doctor import run_doctor
+
+    code = run_doctor(session.cfg, session.console)
+    session.memory.append(
+        "system",
+        "[doctor] "
+        + ("All checks passed." if code == 0 else "One or more checks failed."),
+    )
+
+
+@register_llm_tool(
+    "run_doctor",
+    _function_schema(
+        "run_doctor",
+        "Run environment health checks: config file, API key, data dir, "
+        "SQLite DB integrity, ChromaDB import, disk space, package version. "
+        "Read-only, no LLM or network calls. Renders a diagnostic table "
+        "to the user and returns a one-line summary for the agent. Call "
+        "when the user reports anomalies, asks 'is everything OK', or "
+        "before a heavy run.",
+        {},
+    ),
+)
+def exec_run_doctor(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.cli_doctor import run_doctor
+
+    code = run_doctor(session.cfg, session.console)
+    if code == 0:
+        return (
+            "Environment health: all checks passed. Diagnostic table "
+            "rendered to the user."
+        )
+    return (
+        "Environment health: one or more checks FAILED. Diagnostic table "
+        "rendered to the user; suggest fixing the failing rows."
+    )
+
+
+# ---------------------------------------------------------- style (read-only)
+
+
+@slash(
+    "style",
+    summary="Show style corpus and fingerprint info (read-only).",
+    usage="/style [show|history]",
+)
+def cmd_style(session: ChatSession, args: str) -> None:
+    parts = args.split()
+    sub = parts[0].lower() if parts else "show"
+    if sub == "show":
+        from research_agent.cli_style import run_style_show
+
+        run_style_show(session.cfg, session.console)
+        return
+    if sub == "history":
+        from research_agent.cli_style import run_style_history
+
+        run_style_history(session.cfg, session.console)
+        return
+    session.console.print(
+        f"[yellow]Unknown:[/yellow] /style {sub}. Try /style show|history."
+    )
+
+
+@register_llm_tool(
+    "style_show",
+    _function_schema(
+        "style_show",
+        "Show the user's Scribe style corpus and fingerprint summary: "
+        "how many paragraphs were imported, from which source papers, "
+        "and whether a fingerprint has been built. Read-only. Call when "
+        "the user asks 'is my style trained', 'what writing samples have "
+        "I imported', or before suggesting a draft/revise action that "
+        "needs a fingerprint.",
+        {},
+    ),
+)
+def exec_style_show(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.cli_style import run_style_show
+    from research_agent.storage.database import Database
+    from research_agent.style.samples import StyleSampleRepository
+
+    db = Database(session.cfg.db_path)
+    try:
+        repo = StyleSampleRepository(db)
+        total = repo.count()
+        by_paper = repo.count_by_paper()
+    finally:
+        db.close()
+
+    run_style_show(session.cfg, session.console)
+
+    if total == 0:
+        return (
+            "Style corpus is empty. Suggest the user run train_style "
+            "(or `research style train`) to import their writing first."
+        )
+    fp_path = session.cfg.fingerprint_path
+    fp_state = "present" if fp_path.exists() else "NOT built yet"
+    return (
+        f"Style corpus: {total} paragraph(s) across {len(by_paper)} source "
+        f"paper(s). Fingerprint: {fp_state} ({fp_path})."
+    )
+
+
+@register_llm_tool(
+    "style_history",
+    _function_schema(
+        "style_history",
+        "List archived fingerprint versions saved under "
+        "~/.research-agent/style/. Use when the user wants to see how "
+        "their style fingerprint has drifted over time. Read-only.",
+        {},
+    ),
+)
+def exec_style_history(session: ChatSession, args: dict[str, Any]) -> str:
+    from research_agent.cli_style import run_style_history
+    from research_agent.style.fingerprint import Fingerprint
+
+    style_dir = session.cfg.style_dir
+    archives = (
+        sorted(style_dir.glob("fingerprint_v*.json")) if style_dir.exists() else []
+    )
+    current = session.cfg.fingerprint_path
+    current_version: int | None = None
+    if current.exists():
+        try:
+            current_version = Fingerprint.load_from(current).version
+        except (OSError, ValueError):
+            current_version = None
+
+    run_style_history(session.cfg, session.console)
+
+    if not archives and current_version is None:
+        return (
+            "No fingerprint history yet. Suggest the user run "
+            "build_fingerprint (or `research style fingerprint`) after "
+            "training samples."
+        )
+    return (
+        f"Fingerprint history: {len(archives)} archived version(s); "
+        f"current v{current_version if current_version is not None else '?'}. "
+        "Table rendered to the user."
+    )
+
+
 # ---------------------------------------------------------------- help
 
 
