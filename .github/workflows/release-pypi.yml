@@ -178,6 +178,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Step order matters: we validate everything we can BEFORE uploading
+      # to PyPI (a permanent, irreversible action), and we create the
+      # git tag ONLY AFTER twine upload succeeds. A failed upload must
+      # never leave an orphan tag pointing at a commit that was never
+      # actually released — that's exactly the v0.5.1 mess we just had
+      # to clean up.
       - name: Refuse to overwrite an existing tag
         run: |
           set -euo pipefail
@@ -191,13 +197,6 @@ jobs:
         with:
           name: dist-${{ inputs.version }}
           path: dist/
-      - name: Create + push tag v${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }} to PyPI"
-          git push origin "v${{ inputs.version }}"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -219,6 +218,16 @@ jobs:
           # exactly what landed on PyPI; --non-interactive guards against
           # twine prompting in CI.
           python -m twine upload --non-interactive --verbose dist/*
+      - name: Create + push tag v${{ inputs.version }}
+        # Only runs if twine upload succeeded above. The tag is the
+        # permanent marker of "this commit was released to PyPI"; we
+        # refuse to claim that marker for a release that didn't happen.
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }} to PyPI"
+          git push origin "v${{ inputs.version }}"
       - name: Summary
         run: |
           {

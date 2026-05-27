@@ -13,14 +13,25 @@ calling — pick whichever feels natural per turn.
 
 ## Install
 
-> Distribution name on PyPI is **`paper-research-agent`** (the
-> Python import name stays `research_agent`). Currently published to
-> Test PyPI while the release stabilises; a production PyPI upload
-> follows once the Test PyPI build has soaked.
+> Distribution name on PyPI is **`paper-research-agent`** (the Python
+> import name stays `research_agent`).
 
-### Option A — From Test PyPI (current)
+### Option A — From PyPI (recommended)
 
-The actual runtime dependencies (PyMuPDF, ChromaDB, openai, …) only
+```bash
+pip install paper-research-agent
+```
+
+Or with [pipx](https://pipx.pypa.io/) for an isolated install:
+
+```bash
+pipx install paper-research-agent
+```
+
+### Option B — From Test PyPI (pre-release builds only)
+
+Pre-release smoke-test builds land on Test PyPI before each PyPI
+release. The runtime dependencies (PyMuPDF, ChromaDB, openai, …) only
 live on real PyPI, so you need both indexes:
 
 ```bash
@@ -30,19 +41,11 @@ pip install \
   paper-research-agent
 ```
 
-Or with [pipx](https://pipx.pypa.io/) for an isolated install:
-
 ```bash
 pipx install \
   --index-url https://test.pypi.org/simple/ \
   --pip-args="--extra-index-url https://pypi.org/simple/" \
   paper-research-agent
-```
-
-### Option B — From PyPI (once published)
-
-```bash
-pip install paper-research-agent        # or: pipx install paper-research-agent
 ```
 
 ### Option C — From source (development)
@@ -57,9 +60,10 @@ After any of the above, `research --help` should list the writing
 suite (`write`, `review`, `check`, `style`) alongside `config` and
 `insights`, and the conversational REPL is one `research` away.
 
-> Latest published build: **0.5.0** (M5 polish — figure generation,
-> doctor, performance, CI, packaging) on Test PyPI —
-> [project page](https://test.pypi.org/project/paper-research-agent/0.5.0/).
+> Latest published build: **0.5.1** on PyPI —
+> [project page](https://pypi.org/project/paper-research-agent/0.5.1/).
+> Same code as Test PyPI `0.5.0`; the version was bumped during the
+> migration from Test-PyPI-only to production PyPI distribution.
 
 ## Configure
 
@@ -172,13 +176,12 @@ positional encodings?"` → `recall_history` then a synthesized recap.
 
 ```bash
 # 1. Install (pick one)
-pipx install --index-url https://test.pypi.org/simple/ \
-             --pip-args="--extra-index-url https://pypi.org/simple/" \
-             paper-research-agent
+pipx install paper-research-agent
+#  or  →  pip install paper-research-agent
 #  or  →  pip install -e ".[dev]" from the repo root for a dev install
 
 # 2. Verify (no API key needed yet)
-research --version            # → research-agent 0.5.0
+research --version            # → research-agent 0.5.1
 research doctor               # → environment health check (config, DB, disk, chromadb)
 
 # 3. Configure
