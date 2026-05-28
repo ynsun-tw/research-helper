@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS reading_queue (
     source        TEXT NOT NULL DEFAULT 'manual',
     status        TEXT NOT NULL DEFAULT 'pending',
     notes         TEXT,
+    pdf_path      TEXT,
     added_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at  TIMESTAMP
 );
@@ -209,6 +210,13 @@ class Database:
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ideas_created ON ideas(created_at)"
             )
+
+        queue_cols = {
+            row[1]
+            for row in self.conn.execute("PRAGMA table_info(reading_queue)").fetchall()
+        }
+        if queue_cols and "pdf_path" not in queue_cols:
+            self.conn.execute("ALTER TABLE reading_queue ADD COLUMN pdf_path TEXT")
 
         paper_cols = {
             row[1] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()

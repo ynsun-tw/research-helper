@@ -1075,14 +1075,204 @@ def exec_recall_history(session: ChatSession, args: dict[str, Any]) -> str:
 
 _QUEUE_SUBS_HELP = (
     "[yellow]Usage:[/yellow] "
-    "/queue [list|add <id> [title…]|remove <id>|done <id>|skip <id>|read|next]"
+    "/queue [list|add <id> [title…]|ingest <folder> [--recursive]"
+    "|remove <id>|done <id>|skip <id>|read|next]"
 )
+
+
+@dataclass
+class QueueIngestResult:
+    """Tally returned by :func:`_ingest_local_folder`.
+
+    Surfaced verbatim to both the slash command and the LLM tool so we can
+    show a consistent "added 7, refreshed 2, skipped 1" summary regardless
+    of how the user triggered the ingest.
+    """
+
+    folder: Path
+    recursive: bool
+    added: list[QueueEntry]
+    refreshed: list[QueueEntry]
+    skipped: list[tuple[Path, str]]
+
+
+def _hash_pdf(path: Path) -> str:
+    """Match ``parsers.pdf._file_fingerprint`` so queue ids align with Paper ids."""
+    import hashlib
+
+    h = hashlib.sha1(usedforsecurity=False)
+    h.update(path.read_bytes())
+    return h.hexdigest()[:12]
+
+
+def _ingest_local_folder(
+    session: ChatSession,
+    folder: str,
+    *,
+    recursive: bool,
+) -> QueueIngestResult:
+    """Add every PDF under ``folder`` to the reading queue without LLM work.
+
+    Each PDF's content is sha1-hashed so the queue id matches what
+    ``parsers.pdf.parse_pdf`` would produce later; re-ingesting the same
+    file is idempotent. The PDF is *not* parsed here - we only need a
+    stable id and a human-readable title (the filename stem).
+    """
+    base = Path(folder).expanduser().resolve()
+    added: list[QueueEntry] = []
+    refreshed: list[QueueEntry] = []
+    skipped: list[tuple[Path, str]] = []
+
+    if not base.exists():
+        skipped.append((base, "folder not found"))
+        return QueueIngestResult(
+            folder=base,
+            recursive=recursive,
+            added=added,
+            refreshed=refreshed,
+            skipped=skipped,
+        )
+    if not base.is_dir():
+        skipped.append((base, "not a directory"))
+        return QueueIngestResult(
+            folder=base,
+            recursive=recursive,
+            added=added,
+            refreshed=refreshed,
+            skipped=skipped,
+        )
+
+    pattern = "**/*.pdf" if recursive else "*.pdf"
+    pdfs = sorted(p for p in base.glob(pattern) if p.is_file())
+    source_label = f"local:{base.name or base.as_posix()}"
+
+    for pdf in pdfs:
+        try:
+            paper_id = f"local:{_hash_pdf(pdf)}"
+        except OSError as exc:
+            skipped.append((pdf, f"read error: {exc}"))
+            continue
+        title = pdf.stem
+        pre = session.queue.get(paper_id)
+        entry = session.queue.add(
+            paper_id,
+            title=title,
+            source=source_label,
+            pdf_path=str(pdf),
+        )
+        if pre is None:
+            added.append(entry)
+        else:
+            refreshed.append(entry)
+
+    return QueueIngestResult(
+        folder=base,
+        recursive=recursive,
+        added=added,
+        refreshed=refreshed,
+        skipped=skipped,
+    )
+
+
+def _format_ingest_summary(result: QueueIngestResult) -> str:
+    """Rich-markup summary line for the slash command output."""
+    parts = [
+        f"[bold]Ingested[/bold] from [cyan]{result.folder}[/cyan]"
+        + (" [dim](recursive)[/dim]" if result.recursive else ""),
+        f"  [green]added:[/green] {len(result.added)}",
+        f"  [yellow]refreshed:[/yellow] {len(result.refreshed)}",
+    ]
+    if result.skipped:
+        parts.append(f"  [red]skipped:[/red] {len(result.skipped)}")
+        for path, reason in result.skipped[:5]:
+            parts.append(f"    [dim]·[/dim] {path}: {reason}")
+        if len(result.skipped) > 5:
+            parts.append(f"    [dim]…and {len(result.skipped) - 5} more[/dim]")
+    if not result.added and not result.refreshed and not result.skipped:
+        parts.append("  [dim](no .pdf files found)[/dim]")
+    return "\n".join(parts)
+
+
+@dataclass
+class AutoIngestResult:
+    """Outcome of the REPL-startup cwd scan.
+
+    Split from :class:`QueueIngestResult` because the auto path is
+    intentionally quieter - it skips hashing for files we've already
+    catalogued (matched by absolute path) and never prints unless it
+    actually picked up something new.
+    """
+
+    folder: Path
+    added: int
+    skipped_known: int
+
+
+def _auto_ingest_cwd(session: ChatSession) -> AutoIngestResult:
+    """Add new PDFs in the current working directory to the queue.
+
+    Skips files whose absolute path is already stored in the queue so
+    repeated REPL launches don't re-hash hundreds of PDFs. Non-recursive
+    on purpose: we surface what the user has *in front of them*, not
+    everything under their home directory.
+    """
+    cwd = Path.cwd()
+    added = 0
+    skipped_known = 0
+    source_label = f"auto:{cwd.name or cwd.as_posix()}"
+
+    for pdf in sorted(p for p in cwd.glob("*.pdf") if p.is_file()):
+        abs_path = str(pdf.resolve())
+        if session.queue.find_by_pdf_path(abs_path) is not None:
+            skipped_known += 1
+            continue
+        try:
+            paper_id = f"local:{_hash_pdf(pdf)}"
+        except OSError:
+            # Unreadable files (permissions, mid-download) shouldn't kill
+            # REPL startup. Just skip them.
+            continue
+        existed = session.queue.get(paper_id) is not None
+        session.queue.add(
+            paper_id,
+            title=pdf.stem,
+            source=source_label,
+            pdf_path=abs_path,
+        )
+        if not existed:
+            added += 1
+        else:
+            # Same content already known under a different path - count
+            # as "known" so we don't claim to have added it.
+            skipped_known += 1
+
+    return AutoIngestResult(folder=cwd, added=added, skipped_known=skipped_known)
+
+
+def _ingest_summary_text(result: QueueIngestResult) -> str:
+    """Plain-text summary returned to the LLM (no rich markup)."""
+    lines = [
+        f"Ingested from {result.folder}"
+        + (" (recursive)" if result.recursive else ""),
+        f"- added: {len(result.added)}",
+        f"- refreshed: {len(result.refreshed)}",
+    ]
+    if result.skipped:
+        lines.append(f"- skipped: {len(result.skipped)}")
+        for path, reason in result.skipped[:5]:
+            lines.append(f"    {path}: {reason}")
+    if not result.added and not result.refreshed and not result.skipped:
+        lines.append("- (no .pdf files found)")
+    return "\n".join(lines)
 
 
 @slash(
     "queue",
-    summary="Manage the reading queue (add / list / remove / read next).",
-    usage="/queue [list|add <id>|remove <id>|done <id>|skip <id>|read|next]",
+    summary="Manage the reading queue (add / ingest / list / remove / read).",
+    usage=(
+        "/queue [list|add <id>|ingest <folder> [--recursive]"
+        "|remove <id>|done <id>|skip <id>|read|next]"
+    ),
 )
 def cmd_queue(session: ChatSession, args: str) -> None:
     parts = args.strip().split(maxsplit=1)
@@ -1122,6 +1312,34 @@ def cmd_queue(session: ChatSession, args: str) -> None:
             f"[green]Queued[/green] {entry.arxiv_id}"
             + (f" - {entry.title}" if entry.title else "")
         )
+        return
+
+    if sub == "ingest":
+        if not rest:
+            session.console.print(
+                "[yellow]Usage:[/yellow] /queue ingest <folder> [--recursive]"
+            )
+            return
+        try:
+            tokens = shlex.split(rest)
+        except ValueError as exc:
+            session.console.print(f"[red]Error:[/red] {exc}")
+            return
+        recursive = False
+        path_tokens: list[str] = []
+        for tok in tokens:
+            if tok in {"--recursive", "-r"}:
+                recursive = True
+            else:
+                path_tokens.append(tok)
+        if not path_tokens:
+            session.console.print(
+                "[yellow]Usage:[/yellow] /queue ingest <folder> [--recursive]"
+            )
+            return
+        folder = " ".join(path_tokens)
+        ingest_result = _ingest_local_folder(session, folder, recursive=recursive)
+        session.console.print(_format_ingest_summary(ingest_result))
         return
 
     if sub in {"remove", "rm"}:
@@ -1179,8 +1397,11 @@ def cmd_queue(session: ChatSession, args: str) -> None:
             f"[bold]Reading next pending:[/bold] "
             f"{read_entry.arxiv_id} {read_entry.title}"
         )
-        result = _load_and_analyze(session, read_entry.arxiv_id)
-        # status update is handled inside _load_and_analyze success path
+        # Local ingest entries use a content-hash id arXiv can't resolve;
+        # hand the saved pdf_path to the loader instead so it parses
+        # straight from disk.
+        load_source = read_entry.pdf_path or read_entry.arxiv_id
+        result = _load_and_analyze(session, load_source)
         if result is not None:
             session.console.print(f"[dim]{result.splitlines()[0]}[/dim]")
         return
@@ -1211,12 +1432,15 @@ def _render_queue(
         else f"Reading queue ({status})"
     )
     table = Table(title=title, show_header=True)
-    table.add_column("arXiv ID", style="cyan")
+    table.add_column("ID", style="cyan")
     table.add_column("Title")
     table.add_column("Status", justify="center")
     table.add_column("Added", style="dim")
     for e in entries:
-        table.add_row(e.arxiv_id, (e.title or "(no title)")[:80], e.status, e.added_at)
+        title_cell = (e.title or "(no title)")[:80]
+        if e.pdf_path:
+            title_cell = f"{title_cell} [dim](local)[/dim]"
+        table.add_row(e.arxiv_id, title_cell, e.status, e.added_at)
     session.console.print(table)
 
 
@@ -1230,6 +1454,41 @@ def _queue_summary_text(entries: list[QueueEntry], *, label: str) -> str:
             title = title[:97] + "…"
         lines.append(f"- {e.arxiv_id} [{e.status}] {title}")
     return "\n".join(lines)
+
+
+@register_llm_tool(
+    "ingest_local_papers",
+    _function_schema(
+        "ingest_local_papers",
+        "Bulk-add every .pdf in a local folder to the reading queue. No LLM "
+        "analysis runs; each PDF is content-hashed for an idempotent id and "
+        "its filename stem becomes the title. Use when the user says 'add "
+        "my papers folder', 'ingest ~/path', 'queue all PDFs in <dir>', etc.",
+        {
+            "folder": {
+                "type": "string",
+                "description": "Path to a local folder. ~ is expanded.",
+            },
+            "recursive": {
+                "type": "boolean",
+                "description": (
+                    "If true, descend into subfolders. Default false to "
+                    "match the deliberate 'one folder of curated PDFs' "
+                    "convention used elsewhere in the system."
+                ),
+            },
+        },
+        required=["folder"],
+    ),
+)
+def exec_ingest_local_papers(session: ChatSession, args: dict[str, Any]) -> str:
+    folder = str(args.get("folder", "")).strip()
+    if not folder:
+        return "Error: folder is required."
+    recursive = bool(args.get("recursive", False))
+    result = _ingest_local_folder(session, folder, recursive=recursive)
+    session.console.print(_format_ingest_summary(result))
+    return _ingest_summary_text(result)
 
 
 @register_llm_tool(
@@ -1316,6 +1575,11 @@ def exec_queue_next(session: ChatSession, args: dict[str, Any]) -> str:
     if entry is None:
         return "Queue is empty."
     title = f" (title: {entry.title})" if entry.title else ""
+    if entry.pdf_path:
+        return (
+            f"Next pending: {entry.arxiv_id}{title} [local PDF]. "
+            f"Use load_paper with source='{entry.pdf_path}' to read it."
+        )
     return f"Next pending: {entry.arxiv_id}{title}. Use load_paper to read it."
 
 

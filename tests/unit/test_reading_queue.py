@@ -12,6 +12,7 @@ from research_agent.chat.session import ChatSession
 from research_agent.chat.tools import (
     LLM_TOOLS,
     cmd_queue,
+    exec_ingest_local_papers,
     exec_queue_add,
     exec_queue_list,
     exec_queue_next,
@@ -354,3 +355,329 @@ def test_load_and_analyze_marks_queued_paper_done(
 
 def test_all_allowed_statuses_constant() -> None:
     assert {"pending", "in_progress", "done", "skipped"} == ALLOWED_STATUSES
+
+
+# ------------------------ local PDF folder ingestion -----------------------
+
+
+def _make_fake_pdf(folder: Path, name: str, payload: bytes = b"") -> Path:
+    """Drop a sham .pdf file so ingest can hash it without real parsing."""
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
+    # Distinct content per call keeps sha1s distinct (default name-based seed).
+    path.write_bytes(payload or f"%PDF-1.4\n{name}".encode())
+    return path
+
+
+def test_repo_add_persists_pdf_path(tmp_path: Path) -> None:
+    db = Database(tmp_path / "memory.db")
+    repo = ReadingQueueRepository(db)
+    entry = repo.add(
+        "local:abc123", title="hello", pdf_path="/tmp/hello.pdf"
+    )
+    assert entry.pdf_path == "/tmp/hello.pdf"
+    again = repo.get("local:abc123")
+    assert again is not None
+    assert again.pdf_path == "/tmp/hello.pdf"
+    db.close()
+
+
+def test_repo_add_refreshes_pdf_path_when_changed(tmp_path: Path) -> None:
+    db = Database(tmp_path / "memory.db")
+    repo = ReadingQueueRepository(db)
+    repo.add("local:abc123", pdf_path="/old/path.pdf")
+    refreshed = repo.add("local:abc123", pdf_path="/new/path.pdf")
+    assert refreshed.pdf_path == "/new/path.pdf"
+    db.close()
+
+
+def test_ingest_local_folder_picks_up_pdfs(tmp_path: Path) -> None:
+    from research_agent.chat.tools import _ingest_local_folder
+
+    session, _ = _make_session(tmp_path)
+    papers = tmp_path / "papers"
+    _make_fake_pdf(papers, "attention.pdf")
+    _make_fake_pdf(papers, "bert.pdf")
+    _make_fake_pdf(papers, "ignored.txt", payload=b"not a pdf")
+
+    result = _ingest_local_folder(session, str(papers), recursive=False)
+
+    assert len(result.added) == 2
+    assert not result.refreshed
+    assert not result.skipped
+    titles = sorted(e.title for e in result.added)
+    assert titles == ["attention", "bert"]
+    for entry in result.added:
+        assert entry.arxiv_id.startswith("local:")
+        assert entry.pdf_path.endswith(".pdf")
+        assert entry.status == "pending"
+    session.close()
+
+
+def test_ingest_local_folder_is_idempotent(tmp_path: Path) -> None:
+    from research_agent.chat.tools import _ingest_local_folder
+
+    session, _ = _make_session(tmp_path)
+    papers = tmp_path / "papers"
+    _make_fake_pdf(papers, "p1.pdf")
+
+    first = _ingest_local_folder(session, str(papers), recursive=False)
+    second = _ingest_local_folder(session, str(papers), recursive=False)
+
+    assert len(first.added) == 1
+    assert not second.added
+    assert len(second.refreshed) == 1
+    assert second.refreshed[0].arxiv_id == first.added[0].arxiv_id
+    assert len(session.queue.list()) == 1
+    session.close()
+
+
+def test_ingest_local_folder_recursive_flag(tmp_path: Path) -> None:
+    from research_agent.chat.tools import _ingest_local_folder
+
+    session, _ = _make_session(tmp_path)
+    root = tmp_path / "library"
+    _make_fake_pdf(root, "top.pdf")
+    _make_fake_pdf(root / "nested", "deep.pdf")
+
+    shallow = _ingest_local_folder(session, str(root), recursive=False)
+    assert len(shallow.added) == 1
+    assert shallow.added[0].title == "top"
+
+    # Reset and re-ingest recursively.
+    for entry in session.queue.list():
+        session.queue.remove(entry.arxiv_id)
+    deep = _ingest_local_folder(session, str(root), recursive=True)
+    titles = sorted(e.title for e in deep.added)
+    assert titles == ["deep", "top"]
+    session.close()
+
+
+def test_ingest_local_folder_reports_missing_dir(tmp_path: Path) -> None:
+    from research_agent.chat.tools import _ingest_local_folder
+
+    session, _ = _make_session(tmp_path)
+    result = _ingest_local_folder(
+        session, str(tmp_path / "nope"), recursive=False
+    )
+    assert not result.added
+    assert result.skipped
+    assert "not found" in result.skipped[0][1]
+    session.close()
+
+
+def test_cmd_queue_ingest_subcommand(tmp_path: Path) -> None:
+    session, console = _make_session(tmp_path)
+    papers = tmp_path / "papers"
+    _make_fake_pdf(papers, "alpha.pdf")
+    _make_fake_pdf(papers, "beta.pdf")
+
+    cmd_queue(session, f"ingest {papers}")
+
+    out = console.file.getvalue()
+    assert "added:" in out
+    assert "2" in out
+    entries = session.queue.list()
+    assert len(entries) == 2
+    for e in entries:
+        assert e.pdf_path
+    session.close()
+
+
+def test_cmd_queue_ingest_recursive_flag(tmp_path: Path) -> None:
+    session, console = _make_session(tmp_path)
+    root = tmp_path / "library"
+    _make_fake_pdf(root, "top.pdf")
+    _make_fake_pdf(root / "nested", "deep.pdf")
+
+    cmd_queue(session, f"ingest {root} --recursive")
+
+    out = console.file.getvalue()
+    assert "(recursive)" in out
+    assert len(session.queue.list()) == 2
+    session.close()
+
+
+def test_cmd_queue_ingest_usage_when_no_arg(tmp_path: Path) -> None:
+    session, console = _make_session(tmp_path)
+    cmd_queue(session, "ingest")
+    out = console.file.getvalue()
+    assert "Usage" in out
+    session.close()
+
+
+def test_exec_ingest_local_papers_returns_summary(tmp_path: Path) -> None:
+    session, _ = _make_session(tmp_path)
+    papers = tmp_path / "papers"
+    _make_fake_pdf(papers, "gamma.pdf")
+
+    text = exec_ingest_local_papers(session, {"folder": str(papers)})
+    assert "added: 1" in text
+    assert "gamma" not in text  # summary doesn't list filenames by default
+    assert session.queue.get(session.queue.list()[0].arxiv_id) is not None
+    session.close()
+
+
+def test_exec_ingest_local_papers_missing_folder_arg(tmp_path: Path) -> None:
+    session, _ = _make_session(tmp_path)
+    assert "Error" in exec_ingest_local_papers(session, {})
+    assert "Error" in exec_ingest_local_papers(session, {"folder": "   "})
+    session.close()
+
+
+def test_ingest_local_tool_is_registered() -> None:
+    assert "ingest_local_papers" in LLM_TOOLS
+    schema = LLM_TOOLS["ingest_local_papers"].schema["function"]
+    assert "folder" in schema["parameters"]["required"]
+
+
+def test_cmd_queue_read_uses_pdf_path_for_local_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Local entries (no arXiv id) must hand the PDF path to the loader,
+    not the content-hash id arXiv can't resolve."""
+    session, _ = _make_session(tmp_path)
+    papers = tmp_path / "papers"
+    pdf = _make_fake_pdf(papers, "solo.pdf")
+    session.queue.add(
+        "local:fakehash", title="solo", pdf_path=str(pdf)
+    )
+
+    captured: dict[str, str] = {}
+
+    def fake_load_and_analyze(s: ChatSession, source: str) -> str:
+        captured["source"] = source
+        return "ok"
+
+    monkeypatch.setattr(
+        "research_agent.chat.tools._load_and_analyze", fake_load_and_analyze
+    )
+    cmd_queue(session, "read")
+    assert captured["source"] == str(pdf)
+    session.close()
+
+
+def test_exec_queue_next_hints_local_pdf_path(tmp_path: Path) -> None:
+    session, _ = _make_session(tmp_path)
+    session.queue.add(
+        "local:abc", title="local", pdf_path="/tmp/local.pdf"
+    )
+    text = exec_queue_next(session, {})
+    assert "/tmp/local.pdf" in text
+    assert "local PDF" in text
+    session.close()
+
+
+def test_repo_find_by_pdf_path_round_trip(tmp_path: Path) -> None:
+    db = Database(tmp_path / "memory.db")
+    repo = ReadingQueueRepository(db)
+    repo.add("local:abc", title="x", pdf_path="/abs/x.pdf")
+    repo.add("1706.03762", title="arxiv-only")  # no pdf_path
+
+    hit = repo.find_by_pdf_path("/abs/x.pdf")
+    assert hit is not None
+    assert hit.arxiv_id == "local:abc"
+    assert repo.find_by_pdf_path("/nope") is None
+    assert repo.find_by_pdf_path("") is None  # empty path is a no-op
+    db.close()
+
+
+def test_auto_ingest_cwd_adds_new_pdfs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from research_agent.chat.tools import _auto_ingest_cwd
+
+    workdir = tmp_path / "papers"
+    workdir.mkdir()
+    _make_fake_pdf(workdir, "a.pdf")
+    _make_fake_pdf(workdir, "b.pdf")
+
+    session, _ = _make_session(tmp_path)
+    monkeypatch.chdir(workdir)
+    result = _auto_ingest_cwd(session)
+    assert result.added == 2
+    assert result.skipped_known == 0
+    assert result.folder == workdir
+    paths = {e.pdf_path for e in session.queue.list()}
+    assert paths == {str((workdir / "a.pdf").resolve()),
+                     str((workdir / "b.pdf").resolve())}
+    session.close()
+
+
+def test_auto_ingest_cwd_skips_known_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Second startup should NOT re-hash files already in the queue."""
+    from research_agent.chat.tools import _auto_ingest_cwd, _hash_pdf
+
+    workdir = tmp_path / "papers"
+    workdir.mkdir()
+    pdf = _make_fake_pdf(workdir, "a.pdf")
+
+    session, _ = _make_session(tmp_path)
+    monkeypatch.chdir(workdir)
+    _auto_ingest_cwd(session)
+
+    calls = {"n": 0}
+    real_hash = _hash_pdf
+
+    def counting_hash(path: Path) -> str:
+        calls["n"] += 1
+        return real_hash(path)
+
+    monkeypatch.setattr(
+        "research_agent.chat.tools._hash_pdf", counting_hash
+    )
+    second = _auto_ingest_cwd(session)
+    assert second.added == 0
+    assert second.skipped_known == 1
+    assert calls["n"] == 0  # never hashed again
+    assert pdf.exists()  # sanity
+    session.close()
+
+
+def test_auto_ingest_cwd_silent_when_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from research_agent.chat.tools import _auto_ingest_cwd
+
+    workdir = tmp_path / "empty"
+    workdir.mkdir()
+    session, _ = _make_session(tmp_path)
+    monkeypatch.chdir(workdir)
+    result = _auto_ingest_cwd(session)
+    assert result.added == 0
+    assert result.skipped_known == 0
+    session.close()
+
+
+def test_auto_ingest_cwd_is_not_recursive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from research_agent.chat.tools import _auto_ingest_cwd
+
+    workdir = tmp_path / "library"
+    workdir.mkdir()
+    _make_fake_pdf(workdir, "top.pdf")
+    _make_fake_pdf(workdir / "nested", "deep.pdf")
+
+    session, _ = _make_session(tmp_path)
+    monkeypatch.chdir(workdir)
+    result = _auto_ingest_cwd(session)
+    assert result.added == 1
+    titles = [e.title for e in session.queue.list()]
+    assert titles == ["top"]
+    session.close()
+
+
+def test_render_queue_marks_local_entries(tmp_path: Path) -> None:
+    session, console = _make_session(tmp_path)
+    session.queue.add("1706.03762", title="Attention")  # arXiv entry
+    session.queue.add(
+        "local:abc", title="my-paper", pdf_path="/tmp/x.pdf"
+    )
+    cmd_queue(session, "list all")
+    out = console.file.getvalue()
+    assert "my-paper" in out
+    assert "local" in out  # the (local) badge
+    session.close()

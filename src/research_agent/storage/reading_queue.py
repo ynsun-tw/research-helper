@@ -30,6 +30,7 @@ class QueueEntry:
     notes: str
     added_at: str
     completed_at: str | None
+    pdf_path: str = ""
 
 
 class ReadingQueueRepository:
@@ -47,12 +48,14 @@ class ReadingQueueRepository:
         title: str = "",
         source: str = "manual",
         notes: str = "",
+        pdf_path: str = "",
     ) -> QueueEntry:
         """Insert or refresh a pending entry. Returns the row, new or existing.
 
         If an entry exists (any status), we leave its state alone but refresh
-        the title/source/notes so re-adding from a fresh /search result fills
-        in metadata that was missing on the original manual add.
+        the title/source/notes/pdf_path so re-adding from a fresh /search
+        result or a re-ingested folder fills in metadata that was missing on
+        the original manual add.
         """
         arxiv_id = arxiv_id.strip()
         if not arxiv_id:
@@ -70,6 +73,9 @@ class ReadingQueueRepository:
             if notes and notes != existing.notes:
                 updates.append("notes = ?")
                 params.append(notes)
+            if pdf_path and pdf_path != existing.pdf_path:
+                updates.append("pdf_path = ?")
+                params.append(pdf_path)
             if updates:
                 params.append(existing.id)
                 with self.db.conn:
@@ -83,10 +89,11 @@ class ReadingQueueRepository:
         with self.db.conn:
             self.db.conn.execute(
                 """
-                INSERT INTO reading_queue (id, arxiv_id, title, source, status, notes)
-                VALUES (?, ?, ?, ?, 'pending', ?)
+                INSERT INTO reading_queue
+                    (id, arxiv_id, title, source, status, notes, pdf_path)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?)
                 """,
-                (row_id, arxiv_id, title, source, notes),
+                (row_id, arxiv_id, title, source, notes, pdf_path),
             )
         entry = self.get(arxiv_id)
         assert entry is not None
@@ -142,6 +149,20 @@ class ReadingQueueRepository:
         ).fetchone()
         return _row_to_entry(row) if row else None
 
+    def find_by_pdf_path(self, pdf_path: str) -> QueueEntry | None:
+        """Look up by stored absolute PDF path.
+
+        Used by auto-ingest on REPL startup so repeated launches don't
+        re-hash every PDF in cwd. Pass an absolute, resolved path - we
+        compare verbatim, no normalisation.
+        """
+        if not pdf_path:
+            return None
+        row = self.db.conn.execute(
+            "SELECT * FROM reading_queue WHERE pdf_path = ?", (pdf_path,)
+        ).fetchone()
+        return _row_to_entry(row) if row else None
+
     def list(self, status: QueueStatus | None = None) -> list[QueueEntry]:
         if status is None:
             rows = self.db.conn.execute(
@@ -169,6 +190,12 @@ class ReadingQueueRepository:
 
 
 def _row_to_entry(row: sqlite3.Row) -> QueueEntry:
+    pdf_path = ""
+    try:
+        pdf_path = row["pdf_path"] or ""
+    except (IndexError, KeyError):
+        # Legacy rows from before the pdf_path migration ran.
+        pdf_path = ""
     return QueueEntry(
         id=row["id"],
         arxiv_id=row["arxiv_id"],
@@ -178,4 +205,5 @@ def _row_to_entry(row: sqlite3.Row) -> QueueEntry:
         notes=row["notes"] or "",
         added_at=row["added_at"],
         completed_at=row["completed_at"],
+        pdf_path=pdf_path,
     )

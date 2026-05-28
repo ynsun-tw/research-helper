@@ -48,7 +48,11 @@ Routing rules (schemas don't encode these):
 - ``discuss_idea`` requires an anchor paper — call ``load_paper`` first
   if none is loaded.
 - "save this for later" / "queue this" → ``queue_add`` (NOT ``load_paper``).
-  "read the next one" → ``queue_next`` then ``load_paper``.
+  "read the next one" → ``queue_next`` then ``load_paper`` (use the
+  ``source`` hint queue_next returns for local-PDF entries).
+- "add my papers folder" / "ingest ~/path" / "queue all PDFs in <dir>" →
+  ``ingest_local_papers``. No LLM analysis runs; this just registers
+  files for later reading.
 - Citation-graph questions ("what cited this?" / "what does this rely on?")
   → ``get_citations`` or ``get_references`` on the anchor paper.
 - Environment complaints ("is my setup OK?") → ``run_doctor`` before
@@ -131,6 +135,24 @@ def run_chat(
         prompt_session=prompt_session,
     )
     console.print(Panel(INTRO_TEXT, border_style="magenta"))
+
+    # Sweep the current working directory for PDFs so the user can launch
+    # ``research`` inside a paper folder and immediately see them in
+    # ``/queue list``. Already-catalogued files are skipped without re-
+    # hashing; net-zero scans stay silent so startup isn't noisier than
+    # before.
+    from research_agent.chat.tools import _auto_ingest_cwd
+
+    try:
+        auto = _auto_ingest_cwd(session)
+    except Exception:  # pragma: no cover - never let scan failure break REPL
+        auto = None
+    if auto is not None and auto.added:
+        console.print(
+            f"[dim]+ {auto.added} paper(s) from "
+            f"[cyan]{auto.folder.name or auto.folder}[/cyan] "
+            f"→ reading queue (/queue list)[/dim]"
+        )
 
     # Ctrl+C with an empty buffer no longer kills the session immediately —
     # the user has to press it twice (or once after typing something we
