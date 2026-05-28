@@ -29,10 +29,15 @@ KNOWN_KEYS = frozenset(
         "app_url",
         "language",
         "alert_threshold",
+        "context_window_tokens",
+        "reserve_tokens_for_output",
     }
 )
 
 DEFAULT_ALERT_THRESHOLD = 0.8
+# 0 means "auto-detect from model slug" via memory.lookup_model_context_window.
+DEFAULT_CONTEXT_WINDOW_TOKENS = 0
+DEFAULT_RESERVE_TOKENS_FOR_OUTPUT = 4000
 
 
 class ConfigError(Exception):
@@ -71,6 +76,13 @@ class Config(BaseModel):
     # Values must lie in [0.0, 1.0]; out-of-range YAML values are
     # clamped silently rather than crashing config loading.
     alert_threshold: float = DEFAULT_ALERT_THRESHOLD
+    # T2.2 context-budget knobs. ``0`` = auto-detect from the model slug
+    # via ``research_agent.memory.lookup_model_context_window``.
+    # ``reserve_tokens_for_output`` is subtracted from the detected window
+    # so the reply has room to land. Both default to safe values that
+    # preserve the pre-T2.2 fixed-8K behaviour on unknown models.
+    context_window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS
+    reserve_tokens_for_output: int = DEFAULT_RESERVE_TOKENS_FOR_OUTPUT
 
     @field_validator("api_key", mode="before")
     @classmethod
@@ -106,6 +118,19 @@ class Config(BaseModel):
         except (TypeError, ValueError):
             return DEFAULT_ALERT_THRESHOLD
         return max(0.0, min(1.0, v))
+
+    @field_validator(
+        "context_window_tokens", "reserve_tokens_for_output", mode="before"
+    )
+    @classmethod
+    def _coerce_token_budget(cls, value: Any) -> int:
+        if value is None:
+            return 0
+        try:
+            v = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, v)
 
     def ensure_openrouter_alignment(self) -> Config:
         """Fix base_url when key/model clearly target OpenRouter but URL does not."""
@@ -169,6 +194,8 @@ class Config(BaseModel):
             "language": self.language,
             "data_dir": str(self.data_dir),
             "alert_threshold": self.alert_threshold,
+            "context_window_tokens": self.context_window_tokens,
+            "reserve_tokens_for_output": self.reserve_tokens_for_output,
         }
         with self.config_path.open("w", encoding="utf-8") as f:
             yaml.safe_dump(payload, f, default_flow_style=False, allow_unicode=True)
@@ -216,6 +243,19 @@ class Config(BaseModel):
                         f"alert_threshold must be in [0.0, 1.0], got {fv}"
                     )
                 setattr(self, key, fv)
+            elif key in {"context_window_tokens", "reserve_tokens_for_output"}:
+                try:
+                    iv = int(value)
+                except (TypeError, ValueError) as exc:
+                    raise ConfigError(
+                        f"{key} must be a non-negative integer "
+                        "(0 = auto-detect for context_window_tokens)"
+                    ) from exc
+                if iv < 0:
+                    raise ConfigError(
+                        f"{key} must be >= 0, got {iv}"
+                    )
+                setattr(self, key, iv)
             else:
                 setattr(self, key, value.strip() if isinstance(value, str) else value)
         except ValueError as exc:

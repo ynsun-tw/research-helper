@@ -208,3 +208,70 @@
   - 4 chars/token 在中文（每汉字 ≈ 1.5–2 tokens）下偏低估约 40%。footer 里数字是粗略指引，不是计费值。
 - **未做**: prompt caching（ADR-011 候选）、tiktoken 精确计数、tool result 自动摘要、流式期间 cancel LLM 调用。
 - **后续可选演进**: 把 ADR-010 的 `MAX_TOOL_RESULT_CHARS` / `history_limit` 改成 `config.yaml` 字段，让重度用户能在精度 vs 成本之间手动平衡；加 prompt caching 后预计同样 4-tool 对话能再降到 ~10K input tokens。
+
+### ADR-011: Chat 路径上下文管理第二轮（0.6.1 → 后续）
+- **状态**: 已决定（2026-05）
+- **触发**: ADR-010 落地后再次实测每轮固定 overhead：`CHAT_SYSTEM_PROMPT` 已压到 ~629 tokens，但 28 个 tool schemas 序列化仍占 ~4022 tokens，是单轮请求里最大的常量。同时发现三类残留浪费：(a) `history_limit=8` 是消息数粗砍，一段 6K-token 的 `/insights` markdown 会单条吃掉绝大部分历史预算，反而把刚才的用户提问挤出上下文；(b) `/search` `/insights` `/cites` `/refs` 等 slash 仍以 `role=system` 直写 `WorkingMemory` 且**没有打 `kind=tool_log` 标签**，每条几百到几千 tokens 在下一轮再次发给 LLM，与 ADR-010 的"tool 输出不进 history"约定相互矛盾；(c) `DEFAULT_MAX_CONTEXT_TOKENS=8000` 是常量，对 DeepSeek (64K) / Claude (200K) / GPT-4o (128K) 一视同仁，浪费了 ≥ 90% 的可用窗口。
+- **决策**: 按 ROI 分三档共十项落地，T1 是无脑收益、T2 是中等工程量的杠杆、T3 是有用但非紧急的精修：
+  - **T1.1 Tool schema 节食**: 28 个 schema 逐个砍掉 "If X, then Y" 形式的实现细节、参数级的冗长示例；保留 LLM 路由所需的最小语义（"is this the tool I want? what's the rough param shape?"）。chaining rules 留在 `CHAT_SYSTEM_PROMPT` 里。
+  - **T1.2 History 改 token-budget 选取**: `_build_messages` 不再用 `history_limit=8`，而是 `_select_history_within_budget(eligible, max_tokens=4000)` newest→oldest 累加；同时保留 `MIN_HISTORY_TURNS=3` 下限，避免单条超长消息把当前用户提问也挤掉。
+  - **T1.3 Slash 内存写入打标签**: `/search` `/insights` `/cites` `/refs` `/refine` `/doctor` 以及 `_surface_parked_idea_alerts` / `_surface_activation_alerts` 共 8 处 `memory.append("system", ...)` 全部补上 `metadata={"kind": "tool_log"}`。`/read` 的 "Loaded and analyzed paper X" 不打 — 它是会话锚点切换的真信号，下一轮 LLM 需要看到。
+  - **T2.1 滚动摘要**: 新增 `chat/compactor.py`。当 live history > 16 条时，把最早 (len−8) 条用便宜 LLM call 压成一条 ≤ 150 字的 `[earlier session summary]`，原始条目就地改 `kind=compacted`（不删除，`/history` 还能看到）。摘要在 `_build_messages` 里特殊 hoist 到 system prompt 后、anchor hint 后的固定位置，不参与 token-budget 选取。失败被 `contextlib.suppress(Exception)` 吞掉 — compactor 永远不能阻断 agent loop。
+  - **T2.2 Model-aware context budget**: `memory/working_memory.py` 加 `MODEL_CONTEXT_WINDOWS` 查表（claude → 200K、gpt-4o → 128K、deepseek → 64K …）和 `resolve_context_budget(model, override, reserve_output)` 帮手；`Config` 加 `context_window_tokens` (`0` = 自动) 与 `reserve_tokens_for_output` (默认 4K) 两个字段。`ChatSession.create` 用真实窗口减去输出 reserve 设 `max_context_tokens`；保留 8K 下限，未知小模型不会被异常放大。
+  - **T2.3 Scratchpad 跨轮缓存**: 列了一份 `SCRATCHPAD_TOOLS = {search_arxiv, list_ideas, queue_list, queue_next, recent_searches, recall_history}` — 都是幂等只读、再调一次成本不便宜的工具。每次执行后把结果（截到 `SCRATCHPAD_MAX_CHARS=1500`）写为 `kind=scratchpad, tool_name=<name>` 一条；同名旧条目就地降级为 `tool_log`。下一轮 `_build_messages` 把全部 scratchpad 上提到 system 段。LLM 不需要为了"刚才搜的东西"再调一次。
+  - **T3.1 tiktoken 精确计数（opt-in）**: `estimate_tokens` 优先用 `tiktoken.get_encoding("cl100k_base")`，import 失败就 fallback 4 chars/token。`tiktoken` 进 `[project.optional-dependencies].tokens`，缺省安装不带；想要精度就 `pip install research-agent[tokens]`。
+  - **T3.2 Loop 内同调用去重**: agent loop 里加 `call_cache: dict[(name, canonical_args_json), result]`。模型若在同一轮里两次 `search_arxiv(query="X")`，第二次直接命中缓存返回 `[deduplicated] ...`，executor 不再跑。canonical args 走 `json.loads → json.dumps(sort_keys=True)` 抹平字段顺序。
+  - **T3.3 Per-tool 结果上限**: `LLMTool` 加 `result_cap_chars: int | None`。`_RESULT_CAP_OVERRIDES` 表里：`draft_section` / `draft_figure` / `revise_draft` 提到 50K（草稿是交付物，不能截）；`list_ideas` / `queue_list` 收到 2K（重度用户 200 条 idea 必须收紧）；`research_insights` 4K；其余继续走全局 `MAX_TOOL_RESULT_CHARS=8000`。
+  - **T3.4 Provider 真实 usage**: `ChatResponse` 加 `usage: TokenUsage | None`。OpenAI / OpenRouter 流式调用补 `stream_options={"include_usage": True}`，最终 chunk 携带 `usage` 抓取；非流式直接读 `resp.usage`。`_chat_with_llm` 累加真实计数，footer 在拿得到 exact 数字时去掉 `~` 前缀。
+
+- **选型权衡**:
+  - **T1.1 vs 更激进的 schema 压缩**: 没有把 schema 全压成 name + 一句话。OpenAI function-calling 的 routing 质量与 description 信息量正相关，再砍会让模型选错工具；保留单句语义 + 参数级一句话已经覆盖 90% 的路由场景。
+  - **T1.2 token-budget vs 完全摘要历史**: 没有上 "每轮自动摘要 history"。摘要要花一次额外 LLM call，对 95% 的短会话纯加成本；T2.1 的阈值触发模型已经把"长会话才付费"做了精细化。
+  - **T2.1 trigger 阈值（16/8）**: 阈值越低越能省，但每条召回 vs 摘要的边际效益反转点大约在 20 条左右。16/8 留了 8 条最新原文做精确上下文，保守一些；后续可调到 (24, 12)。
+  - **T2.2 是否引入"已用 input tokens 自适应"**: 没有。budget 在 session 起点根据 model + override 算一次后固定，避免运行时反复重新预算导致 history 被反复截。如果用户中途换 model 需重启 REPL（与 ADR-010 的 `set_config api_key/model/base_url` 决策对齐）。
+  - **T2.3 是否做更广的 scratchpad**: 没把 `load_paper` / `discuss_idea` 等放进来 — 它们是状态变更或带 anchor 副作用的，缓存上轮结果会和真实 session 状态打架（比如锚点已切换但 scratchpad 仍写着旧 paper）。严格只放幂等只读工具。
+  - **T3.1 默认带 tiktoken 与否**: 不默认。+3MB binary、cl100k_base 对非 OpenAI 模型本来也是估算（DeepSeek 用自己的分词器），4 char/token 在中文场景已经偏低估约 40%，再用 tiktoken 也不会突然准。让需要精度的用户显式开启即可。
+  - **T3.2 是否做跨轮（cross-turn）缓存**: 没做。T2.3 的 scratchpad 已经覆盖跨轮"看一下结果就行"的场景；跨轮真去重要处理"用户改主意"等失效信号，状态机复杂度上一个量级。loop 内去重纯防御性，几乎没副作用。
+  - **T3.3 cap 是否做用户配置**: 没做。`_RESULT_CAP_OVERRIDES` 是 lib 级 invariant（draft 永远是交付物、queue 永远不该 20 屏），用户改 cap 不能改变这些约束。如果实测某个 cap 不合理改代码即可。
+  - **T3.4 是否信任 usage 数字做计费**: 不做计费。`TokenUsage` 只用于 footer 显示；自家本地用 estimate 做预算上限（保守）+ 真实 usage 做事后告知（精准），互不影响。
+
+- **实现要点**:
+  - `chat/tools.py` 28 个 `register_llm_tool` decorator 的 description 字段全部重写；新增 `LLMTool.result_cap_chars` + `_RESULT_CAP_OVERRIDES` + 末尾 `_apply_result_cap_overrides()` import-time 调用。
+  - `chat/router.py` 新增 `MAX_HISTORY_TOKENS=4000` / `MIN_HISTORY_TURNS=3` / `_select_history_within_budget` / `_refresh_scratchpad` / `_tool_call_cache_key` / `SCRATCHPAD_TOOLS` / `SCRATCHPAD_MAX_CHARS=1500`；`_build_messages` 改为按 token 选 + hoist `session_summary` + hoist `scratchpad`；`_chat_with_llm` 起点调用 `maybe_compact_history`，loop 里持 `call_cache` 与 `real_in/out_tokens`；`_cap_tool_result` 加 `tool_name=` 参数；`_print_token_footer` 加 `exact=` flag。
+  - `chat/compactor.py` 新增整个文件：`COMPACT_TRIGGER_THRESHOLD=16` / `COMPACT_KEEP_RECENT=8` / `SUMMARY_MAX_CHARS=1200` / `_SUMMARY_SYSTEM_PROMPT` / `maybe_compact_history`。低温（0.2）、`max_tokens=400` 的便宜调用；LLM 失败时不打 `kind=compacted` 标签（避免部分状态）。
+  - `memory/working_memory.py` 新增 `MODEL_CONTEXT_WINDOWS` 表 + `lookup_model_context_window` + `resolve_context_budget` + opt-in tiktoken；`estimate_tokens` 在 encoder 可用且未抛错时走 tiktoken。
+  - `config.py` 加 `context_window_tokens` / `reserve_tokens_for_output` 字段、验证器、`KNOWN_KEYS` / `save` / `set_field` 全套同步。
+  - `core/llm.py` 加 `TokenUsage` dataclass + `ChatResponse.usage` 字段 + `_extract_usage`；OpenAI stream / non-stream 路径都填充。
+  - `chat/session.py` `create` 里读 cfg 算 `max_context_tokens` 而不是写死 8000。
+
+- **影响**:
+  - 单轮 tool schema overhead: ~4022 → ~2832 tokens（**−29.6%**），6 轮 agent loop 累计省 ~7K tokens。
+  - 一段 6K-token `/insights` 不再把当前用户 turn 挤出上下文（T1.2 的 `MIN_HISTORY_TURNS` 兜底）。
+  - 长会话不再"老内容直接 FIFO 丢"，30+ 轮场景仍能引用最早的研究主线（T2.1 摘要兜底）。
+  - 用 Claude / GPT-4o 时上下文预算从 8K → 196K / 124K，长论文 + 多 idea 同会话不再被截。
+  - 启用 tiktoken 后 token 计数误差从 ±20% 降到 ±2%；不启用时与 ADR-010 行为完全一致。
+  - 同一轮内同调用去重消除一类常见 LLM bug（"再 search 一次确认"型双调用），救一次 arXiv API。
+  - footer 在拿到 provider usage 时打 `[N in → M out]` 而不是 `[~N in → ~M out]`，用户能直接做成本判断。
+
+- **代价/风险**:
+  - **T1.1**: schema 描述变短可能让 LLM 偶尔选错近似工具（如把 `recall_history` 当成 `recent_searches` 反之）。已经把工具间的差异留在 description 的第一句（"semantic search over past sessions" vs "list recent /search queries"），实测 700+ 既有测试 + 44 新测试无回归。
+  - **T2.1**: 滚动摘要走的是同一个 `session.llm`（不是单独的便宜 model），花的钱与主模型同价。10 轮以内的短会话完全不会触发；长会话 (>16) 每 8 轮一次摘要，相对收益仍正。摘要 LLM 失败会被 swallow，原始消息不会被丢。
+  - **T2.2**: 大上下文窗口意味着用户如果一直把巨量 history 填进 prompt，账单会变大。`reserve_tokens_for_output` 给了硬上限；`context_window_tokens=0` 默认就是"按 model 自动"，对 DeepSeek 这种便宜模型扩 8 倍预算实际开销没增。
+  - **T2.3**: scratchpad 占用 system prompt 段固定 1500 chars × N 个工具（最多 6 个 ≈ 9K chars / ~2.3K tokens）；现在没限制最多展示多少条，长会话用满 6 个 tool 的极端情况下要再加一个 LRU。当前 6 个工具是上限，可以接受。
+  - **T3.1**: tiktoken (cl100k_base) 对 DeepSeek / Gemini 等家用分词器只是接近，不是精确。footer 数字仍是参考，不是计费。
+  - **T3.2**: 缓存只对完全相同的 `(name, canonical_args)` 命中，模型若稍微改了一个参数（如 `max_results=5` vs `max_results=10`）就 miss — 这是设计意图（用户可能真的想要更多结果）。
+  - **T3.3**: draft tools 的 50K cap 比全局 8K 大 6 倍，单条 tool message 可能上百 KB；context window 大的模型才能消化。在 8K 模型上用 `draft_section` 仍可能超 prompt 限额 — 但那是工具本身就不适合那种模型的问题，不是 cap 的锅。
+  - **T3.4**: stream usage 依赖 OpenAI / OpenRouter 实际返回 `usage` 字段。某些 OpenRouter 后端（特别是非 OpenAI 兼容的 provider 透传）会返回 0 — `is_empty` 检查会自然 fallback 到 heuristic，行为不会比 0.6.1 差。
+
+- **测试覆盖**: 新增 44 个单元测试分布在 `test_chat_token_budget.py`（+8）、`test_chat_compactor.py`（9）、`test_context_budget.py`（11）、`test_chat_scratchpad.py`（6）、`test_chat_tool_dedup.py`（4）、`test_token_usage_telemetry.py`（4）。全套 **788 passed, 5 skipped (network-only)**；ruff + mypy 无新警告。
+
+- **未做**:
+  - prompt caching（仍是 ADR-012 候选）。Anthropic / OpenRouter 的 `cache_control` 能把 schema overhead 砍掉 90%，但需要 provider 分支和消息分段，与目前的统一 `LLMProvider` 抽象有摩擦。
+  - 工具产 markdown 在 console 渲染时**也**累加到 footer 里 — 当前 footer 只算 LLM I/O，不算 rich 渲染。
+  - scratchpad 跨 session 持久化。session 重启后 scratchpad 全失效（与 `WorkingMemory` 同生命周期）；如果用户希望"昨天搜过的还能直接看到"，需要把 scratchpad 写入 SQLite。当前 `recall_history` 已经覆盖这一场景，不重做。
+
+- **后续可选演进**:
+  - prompt caching（ADR-012 候选），预计 4-tool 对话再降 30–50% input tokens。
+  - 把 `MAX_HISTORY_TOKENS` / `COMPACT_TRIGGER_THRESHOLD` / `SCRATCHPAD_MAX_CHARS` 也开放成 config（与 ADR-010 的"后续可选演进"对齐打包），让用户能在精度 vs 成本上手动平衡。
+  - 摘要可以用一个独立、更便宜的小模型（如 `deepseek/deepseek-chat` 而 main 用 `claude-sonnet-4`），现在统一走 `session.llm`，配置后可剥离。
+  - `MODEL_CONTEXT_WINDOWS` 表后续从硬编码挪到 YAML 资源文件，加载新模型不用改代码。

@@ -113,6 +113,13 @@ class ChatSession:
         orch = Orchestrator(llm, language=cfg.language)
         searcher = Searcher(llm, language=cfg.language)
         memory = WorkingMemory.new_session()
+        from research_agent.memory import resolve_context_budget
+
+        max_context_tokens = resolve_context_budget(
+            cfg.model,
+            override=cfg.context_window_tokens,
+            reserve_output=cfg.reserve_tokens_for_output,
+        )
         return cls(
             cfg=cfg,
             llm=llm,
@@ -131,6 +138,7 @@ class ChatSession:
             orch=orch,
             searcher=searcher,
             memory=memory,
+            max_context_tokens=max_context_tokens,
         )
 
     def set_anchor(self, paper: Paper) -> None:

@@ -60,10 +60,32 @@ class LLMTool:
     name: str
     schema: dict[str, Any]
     executor: LLMExecutor
+    # T3.3: per-tool override for the global ``MAX_TOOL_RESULT_CHARS``
+    # cap. Set when a particular tool's output is reliably large (and
+    # worth trimming harder, e.g. ``list_ideas`` for power users) or
+    # when it's the deliverable itself and trimming would corrupt the
+    # answer (e.g. ``draft_section``). ``None`` = use the global cap.
+    result_cap_chars: int | None = None
 
 
 SLASH_COMMANDS: dict[str, SlashCommand] = {}
 LLM_TOOLS: dict[str, LLMTool] = {}
+
+# T3.3: per-tool overrides for the global ``MAX_TOOL_RESULT_CHARS`` cap.
+# Applied at import time after all tools register. Keep this small and
+# only set values that diverge meaningfully from the default — adding
+# entries here is an explicit decision that the tool's output shape is
+# different (deliverable vs noisy list vs normal).
+_RESULT_CAP_OVERRIDES: dict[str, int] = {
+    # Drafts ARE the deliverable; trimming corrupts the answer.
+    "draft_section": 50_000,
+    "draft_figure": 50_000,
+    "revise_draft": 50_000,
+    # Naturally chatty/long-tail lists; trim harder to keep them honest.
+    "list_ideas": 2_000,
+    "queue_list": 2_000,
+    "research_insights": 4_000,
+}
 
 
 def slash(
@@ -105,12 +127,25 @@ def _function_schema(
 
 
 def register_llm_tool(
-    name: str, schema: dict[str, Any]
+    name: str,
+    schema: dict[str, Any],
+    *,
+    result_cap_chars: int | None = None,
 ) -> Callable[[LLMExecutor], LLMExecutor]:
-    """Register an LLM-callable executor; schema must use OpenAI function shape."""
+    """Register an LLM-callable executor; schema must use OpenAI function shape.
+
+    Pass ``result_cap_chars`` to override the global ``MAX_TOOL_RESULT_CHARS``
+    for this specific tool (e.g. drafts should not be truncated; large list
+    tools may want a tighter cap).
+    """
 
     def deco(fn: LLMExecutor) -> LLMExecutor:
-        LLM_TOOLS[name] = LLMTool(name=name, schema=schema, executor=fn)
+        LLM_TOOLS[name] = LLMTool(
+            name=name,
+            schema=schema,
+            executor=fn,
+            result_cap_chars=result_cap_chars,
+        )
         return fn
 
     return deco
@@ -166,7 +201,11 @@ def cmd_search(session: ChatSession, args: str) -> None:
         session.searches.record(
             query, hits, source="arxiv", session_id=session.memory.session_id
         )
-        session.memory.append("system", _search_summary(query, hits))
+        session.memory.append(
+            "system",
+            _search_summary(query, hits),
+            metadata={"kind": "tool_log"},
+        )
         return
 
     scored = _score_hits(session, query, hits)
@@ -180,6 +219,7 @@ def cmd_search(session: ChatSession, args: str) -> None:
     session.memory.append(
         "system",
         _search_summary(query, sorted_hits, already_read=already_read),
+        metadata={"kind": "tool_log"},
     )
 
 
@@ -336,24 +376,21 @@ def _search_summary(
     "search_arxiv",
     _function_schema(
         "search_arxiv",
-        "Search arXiv for papers matching a keyword query. Returns a list of "
-        "candidate papers (id, title, year) but does not load them. Optional "
-        "mode biases the candidate set: 'theoretical' (analysis / proofs), "
-        "'applied' (benchmarks / experiments), 'group:<author-name>' "
-        "(papers by a specific author).",
+        "Search arXiv for papers by keyword. Returns candidates (id, title, "
+        "year); does not load them.",
         {
             "query": {"type": "string", "description": "Keywords or title fragments."},
             "max_results": {
                 "type": "integer",
-                "description": "How many results to return (default 5, max 10).",
+                "description": "Default 5, max 10.",
                 "minimum": 1,
                 "maximum": 10,
             },
             "mode": {
                 "type": "string",
                 "description": (
-                    "Optional search bias. One of: 'theoretical', 'applied', "
-                    "'group:<author-name>'. Unknown values are ignored."
+                    "Optional bias: 'theoretical', 'applied', or "
+                    "'group:<author-name>'."
                 ),
             },
         },
@@ -474,14 +511,12 @@ def _history_summary_text(queries: list[StoredSearchQuery]) -> str:
     "recent_searches",
     _function_schema(
         "recent_searches",
-        "List recent /search queries (across past sessions) along with their "
-        "hits and which arXiv ids the user has already loaded. Use this when "
-        "the user refers to a prior search (e.g. 'open the BERT paper from "
-        "yesterday') to recover the right arxiv_id, then chain into load_paper.",
+        "List recent searches (cross-session) with hits and which arXiv ids "
+        "the user already loaded.",
         {
             "limit": {
                 "type": "integer",
-                "description": "How many recent queries to return (default 10, max 25).",
+                "description": "Default 10, max 25.",
                 "minimum": 1,
                 "maximum": 25,
             },
@@ -573,6 +608,7 @@ def cmd_refine(session: ChatSession, args: str) -> None:
         "system",
         f"Refinement suggestion: query={suggestion.query!r} "
         f"mode={suggestion.mode} reason={suggestion.reason!r}",
+        metadata={"kind": "tool_log"},
     )
     # Interactive accept/edit/skip - the input loop is intentionally simple
     # so non-interactive callers (tests / LLM tool) can short-circuit.
@@ -604,11 +640,8 @@ def cmd_refine(session: ChatSession, args: str) -> None:
     "suggest_search_refinement",
     _function_schema(
         "suggest_search_refinement",
-        "Read the recent discussion transcript and propose the next search "
-        "query (with optional bias mode and a one-sentence reason). Returns "
-        "JSON with fields: query, mode, reason, confidence. The tool does "
-        "NOT execute the search - chain into search_arxiv afterwards if the "
-        "user accepts.",
+        "Propose the next search query from recent discussion. Returns "
+        "{query, mode, reason, confidence}; does not execute.",
         {},
     ),
 )
@@ -699,22 +732,23 @@ def cmd_insights(session: ChatSession, args: str) -> None:
         session.console.print(Markdown(markdown))
     except ImportError:
         session.console.print(markdown)
-    session.memory.append("system", f"Insights report (period={since_days}):\n{markdown}")
+    session.memory.append(
+        "system",
+        f"Insights report (period={since_days}):\n{markdown}",
+        metadata={"kind": "tool_log"},
+    )
 
 
 @register_llm_tool(
     "research_insights",
     _function_schema(
         "research_insights",
-        "Compute a research-activity summary (papers, ideas, discussion "
-        "stats) from local storage and return it as Markdown. Use when the "
-        "user asks 'how am I doing', 'what have I been reading', or 'show "
-        "me my recent activity'. Optional `since_days` filters to recent "
-        "activity (e.g. 30 for last month).",
+        "Markdown summary of recent research activity (papers, ideas, "
+        "discussions).",
         {
             "since_days": {
                 "type": "integer",
-                "description": "Optional day window. Omit for all-time.",
+                "description": "Day window; omit for all-time.",
                 "minimum": 1,
                 "maximum": 3650,
             },
@@ -858,6 +892,7 @@ def cmd_cites(session: ChatSession, args: str) -> None:
         _citation_summary(
             target, hits, relation="citations", already_read=already_read
         ),
+        metadata={"kind": "tool_log"},
     )
 
 
@@ -886,6 +921,7 @@ def cmd_refs(session: ChatSession, args: str) -> None:
         _citation_summary(
             target, hits, relation="references", already_read=already_read
         ),
+        metadata={"kind": "tool_log"},
     )
 
 
@@ -893,16 +929,12 @@ def cmd_refs(session: ChatSession, args: str) -> None:
     "get_citations",
     _function_schema(
         "get_citations",
-        "List papers that cite the given arXiv paper (forward references, "
-        "Semantic Scholar). Useful for finding follow-up work.",
+        "List papers that cite the given arXiv paper (forward refs, via S2).",
         {
-            "arxiv_id": {
-                "type": "string",
-                "description": "arXiv id of the paper whose citations you want.",
-            },
+            "arxiv_id": {"type": "string", "description": "arXiv id."},
             "max_results": {
                 "type": "integer",
-                "description": "How many citations to return (default 10, max 25).",
+                "description": "Default 10, max 25.",
                 "minimum": 1,
                 "maximum": 25,
             },
@@ -933,16 +965,12 @@ def exec_get_citations(session: ChatSession, args: dict[str, Any]) -> str:
     "get_references",
     _function_schema(
         "get_references",
-        "List papers cited by the given arXiv paper (backward references, "
-        "Semantic Scholar). Useful for tracing intellectual lineage.",
+        "List papers cited by the given arXiv paper (backward refs, via S2).",
         {
-            "arxiv_id": {
-                "type": "string",
-                "description": "arXiv id of the paper whose bibliography you want.",
-            },
+            "arxiv_id": {"type": "string", "description": "arXiv id."},
             "max_results": {
                 "type": "integer",
-                "description": "How many references to return (default 10, max 25).",
+                "description": "Default 10, max 25.",
                 "minimum": 1,
                 "maximum": 25,
             },
@@ -1032,20 +1060,16 @@ def _recall_text(matches: list[DiscussionMessage], *, query: str) -> str:
     "recall_history",
     _function_schema(
         "recall_history",
-        "Search the user's past discussions (across all REPL sessions) for "
-        "messages semantically similar to ``query``. Use this when the user "
-        "refers to something previously discussed (e.g. 'what did we say "
-        "about positional encodings last time?'). Returns the top matches "
-        "with role + a snippet; chain into list_ideas or load_paper if you "
-        "need the underlying artifact.",
+        "Semantic search over past-session discussions. Returns top matches "
+        "with role + snippet.",
         {
             "query": {
                 "type": "string",
-                "description": "Natural-language description of the topic to recall.",
+                "description": "Topic to recall (natural language).",
             },
             "limit": {
                 "type": "integer",
-                "description": "Number of past messages to return (default 5, max 15).",
+                "description": "Default 5, max 15.",
                 "minimum": 1,
                 "maximum": 15,
             },
@@ -1460,22 +1484,16 @@ def _queue_summary_text(entries: list[QueueEntry], *, label: str) -> str:
     "ingest_local_papers",
     _function_schema(
         "ingest_local_papers",
-        "Bulk-add every .pdf in a local folder to the reading queue. No LLM "
-        "analysis runs; each PDF is content-hashed for an idempotent id and "
-        "its filename stem becomes the title. Use when the user says 'add "
-        "my papers folder', 'ingest ~/path', 'queue all PDFs in <dir>', etc.",
+        "Bulk-add .pdf files from a local folder to the reading queue. "
+        "No LLM call; idempotent.",
         {
             "folder": {
                 "type": "string",
-                "description": "Path to a local folder. ~ is expanded.",
+                "description": "Folder path (~ expanded).",
             },
             "recursive": {
                 "type": "boolean",
-                "description": (
-                    "If true, descend into subfolders. Default false to "
-                    "match the deliberate 'one folder of curated PDFs' "
-                    "convention used elsewhere in the system."
-                ),
+                "description": "Descend into subfolders. Default false.",
             },
         },
         required=["folder"],
@@ -1495,17 +1513,10 @@ def exec_ingest_local_papers(session: ChatSession, args: dict[str, Any]) -> str:
     "queue_add",
     _function_schema(
         "queue_add",
-        "Add an arXiv paper to the user's reading queue (status=pending). "
-        "If the paper is already queued, refreshes its title/source instead.",
+        "Add an arXiv paper to the reading queue (status=pending).",
         {
-            "arxiv_id": {
-                "type": "string",
-                "description": "arXiv id, e.g. 1706.03762.",
-            },
-            "title": {
-                "type": "string",
-                "description": "Optional title to store with the entry.",
-            },
+            "arxiv_id": {"type": "string", "description": "arXiv id."},
+            "title": {"type": "string", "description": "Optional title."},
         },
         required=["arxiv_id"],
     ),
@@ -1530,14 +1541,12 @@ def exec_queue_add(session: ChatSession, args: dict[str, Any]) -> str:
     "queue_list",
     _function_schema(
         "queue_list",
-        "List entries in the reading queue. Defaults to 'pending'; pass "
-        "status='all' to include done/skipped too.",
+        "List reading-queue entries. Default status=pending.",
         {
             "status": {
                 "type": "string",
                 "description": (
-                    "One of pending, in_progress, done, skipped, or 'all' "
-                    "for every status."
+                    "pending|in_progress|done|skipped|all."
                 ),
             },
         },
@@ -1564,9 +1573,7 @@ def exec_queue_list(session: ChatSession, args: dict[str, Any]) -> str:
     "queue_next",
     _function_schema(
         "queue_next",
-        "Return the next pending paper in the user's reading queue (FIFO). "
-        "Returns the arxiv_id so you can chain into load_paper. Does not "
-        "mutate state.",
+        "Return next pending queue entry (FIFO). Read-only.",
         {},
     ),
 )
@@ -1629,6 +1636,7 @@ def _surface_parked_idea_alerts(session: ChatSession, paper: Paper) -> None:
         session.memory.append(
             "system",
             f"Related parked ideas surfaced for {paper.id}: {title_list}",
+            metadata={"kind": "tool_log"},
         )
     except Exception:
         # Alerts are best-effort - any failure must NOT abort the read.
@@ -1691,6 +1699,7 @@ def _surface_activation_alerts(
         session.memory.append(
             "system",
             f"Search hits may satisfy activation conditions on: {titles}",
+            metadata={"kind": "tool_log"},
         )
     except Exception:
         return
@@ -1775,12 +1784,11 @@ def _load_and_analyze(session: ChatSession, source: str) -> str | None:
     "load_paper",
     _function_schema(
         "load_paper",
-        "Download a paper (by arXiv id, title keywords, or local PDF path) and "
-        "run Analyst + Critic on it. Sets the paper as the conversation anchor.",
+        "Download + analyze a paper (Analyst+Critic). Sets the anchor.",
         {
             "source": {
                 "type": "string",
-                "description": "arXiv id (e.g. 1706.03762), title keywords, or PDF path.",
+                "description": "arXiv id, title keywords, or PDF path.",
             },
         },
         required=["source"],
@@ -1859,14 +1867,12 @@ def _debate_round_summary(debate: DebateHistory) -> str:
     "discuss_idea",
     _function_schema(
         "discuss_idea",
-        "Run one Analyst + Critic debate turn about an idea, grounded in the "
-        "currently anchored paper. The first call yields a structured debate "
-        "(supports, objections, suggestions, score). Subsequent calls produce "
-        "prose follow-ups using accumulated context.",
+        "One Analyst+Critic debate turn against the anchor paper. First call "
+        "scores; later calls produce follow-ups.",
         {
             "idea": {
                 "type": "string",
-                "description": "User idea or follow-up question about the anchor paper.",
+                "description": "Idea or follow-up question.",
             },
         },
         required=["idea"],
@@ -1964,12 +1970,12 @@ def _save_current_idea(session: ChatSession, title: str | None) -> str:
     "save_current_idea",
     _function_schema(
         "save_current_idea",
-        "Persist the current debate as a saved idea. Requires an anchor paper "
-        "and at least one prior discuss_idea round.",
+        "Persist the current debate as a saved idea. Needs an anchor paper "
+        "and one prior discuss_idea call.",
         {
             "title": {
                 "type": "string",
-                "description": "Optional title; if omitted, derived from the seed idea.",
+                "description": "Optional; derived from idea seed if omitted.",
             },
         },
     ),
@@ -2277,30 +2283,29 @@ def _format_figure_summary(figure_type: str, drafts: list[FigureDraft]) -> str:
     "draft_section",
     _function_schema(
         "draft_section",
-        "Draft a paper section in the user's voice (N variants, cached, "
-        "not saved to disk).",
+        "Draft a paper section in the user's voice; N variants, cached, "
+        "not saved.",
         {
             "section": {
                 "type": "string",
                 "description": (
                     "abstract|introduction|related_work|method|results|"
-                    "discussion|conclusion (aliases 'intro' / 'methods' / "
-                    "'experiments' accepted)."
+                    "discussion|conclusion."
                 ),
             },
             "context": {
                 "type": "string",
-                "description": "Research context to ground the draft in.",
+                "description": "Research context to ground the draft.",
             },
             "target_words": {
                 "type": "integer",
-                "description": "Target words per draft (±20%). Default 300.",
+                "description": "Default 300.",
                 "minimum": 50,
                 "maximum": 2000,
             },
             "versions": {
                 "type": "integer",
-                "description": "Variants (1-5). Default 3.",
+                "description": "Default 3.",
                 "minimum": 1,
                 "maximum": 5,
             },
@@ -2308,8 +2313,7 @@ def _format_figure_summary(figure_type: str, drafts: list[FigureDraft]) -> str:
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Paths or `latest` refs ('latest', 'latest:<section>', "
-                    "'latest:<section>:<version>') for consistency check."
+                    "Paths or `latest[:section[:version]]` refs."
                 ),
             },
         },
@@ -2372,35 +2376,28 @@ def exec_draft_section(session: ChatSession, args: dict[str, Any]) -> str:
     "draft_figure",
     _function_schema(
         "draft_figure",
-        "Generate figure code (TikZ for architecture, matplotlib for "
-        "result, text-to-image prompt for concept). N variants, cached.",
+        "Generate figure code: TikZ (architecture), matplotlib (result), "
+        "text-to-image prompt (concept). N variants, cached.",
         {
             "figure_type": {
                 "type": "string",
-                "description": (
-                    "architecture|result|concept (aliases 'pipeline', "
-                    "'plot', 'schematic' accepted)."
-                ),
+                "description": "architecture|result|concept.",
             },
-            "description": {
-                "type": "string",
-                "description": "What to draw.",
-            },
+            "description": {"type": "string", "description": "What to draw."},
             "data": {
                 "type": "string",
-                "description": "Quantitative payload for result figures.",
+                "description": "Quantitative payload (result figures).",
             },
             "versions": {
                 "type": "integer",
-                "description": "Variants (1-4). Default 2.",
+                "description": "Default 2.",
                 "minimum": 1,
                 "maximum": 4,
             },
             "verify": {
                 "type": "boolean",
                 "description": (
-                    "If true and figure_type=result, actually run each "
-                    "draft (30s, Agg backend) and report pass/fail."
+                    "Run each result draft (30s Agg) and report pass/fail."
                 ),
             },
         },
@@ -2455,39 +2452,29 @@ def exec_draft_figure(session: ChatSession, args: dict[str, Any]) -> str:
     "save_draft_to_file",
     _function_schema(
         "save_draft_to_file",
-        "Write a cached draft / figure / revision to a Markdown file. "
-        "Only call after the user explicitly asks to save.",
+        "Write a cached draft/figure/revision to Markdown. Call only after "
+        "the user asks to save.",
         {
             "path": {
                 "type": "string",
-                "description": "Destination (~ expanded, parents created).",
+                "description": "Destination (~ expanded).",
             },
             "kind": {
                 "type": "string",
                 "enum": ["section", "figure", "revision"],
-                "description": (
-                    "section|figure|revision. Omit to infer when "
-                    "unambiguous."
-                ),
+                "description": "Omit to infer when unambiguous.",
             },
             "section": {
                 "type": "string",
-                "description": (
-                    "Section name. Required if multiple sections cached."
-                ),
+                "description": "Required if multiple sections cached.",
             },
             "figure_type": {
                 "type": "string",
-                "description": (
-                    "Figure type. Required if multiple figures cached."
-                ),
+                "description": "Required if multiple figures cached.",
             },
             "version": {
                 "type": "string",
-                "description": (
-                    "Variant letter (A/B/C). Omit to save the whole "
-                    "bouquet. Ignored for revision."
-                ),
+                "description": "A/B/C; omit to save the whole bouquet.",
             },
         },
         required=["path"],
@@ -2691,27 +2678,17 @@ def _save_revision(
     "check_self_plagiarism",
     _function_schema(
         "check_self_plagiarism",
-        "Scan a draft against the user's own published-work corpus to "
-        "flag accidental self-duplication. Paragraph-level TF-IDF + "
-        "cosine similarity, no LLM call. Use after a draft is complete "
-        "or when the user worries about overlap with their prior work.",
+        "TF-IDF scan of a draft vs the user's own corpus. No LLM.",
         {
             "target": {
                 "type": "string",
                 "description": (
-                    "Either a path to a draft file, or a `latest` ref "
-                    "('latest', 'latest:<section>', "
-                    "'latest:<section>:<version>') resolving against the "
-                    "session draft cache."
+                    "Draft path or `latest[:section[:version]]` ref."
                 ),
             },
             "threshold": {
                 "type": "number",
-                "description": (
-                    "Cosine similarity threshold in (0, 1]. Paragraphs "
-                    "at or above this similarity get flagged. Default "
-                    "0.4."
-                ),
+                "description": "Cosine similarity in (0,1]. Default 0.4.",
                 "minimum": 0.01,
                 "maximum": 1.0,
             },
@@ -2791,22 +2768,19 @@ def exec_check_self_plagiarism(
     "revise_draft",
     _function_schema(
         "revise_draft",
-        "Auto-review (Analyst+Critic) then Scribe rewrite. Non-interactive; "
-        "revised draft is cached as a revision.",
+        "Analyst+Critic review, then Scribe rewrite. Caches the revision.",
         {
             "target": {
                 "type": "string",
-                "description": "Path or `latest` ref to the draft.",
+                "description": "Path or `latest` ref.",
             },
             "section": {
                 "type": "string",
-                "description": (
-                    "Section name. Required when target is a path."
-                ),
+                "description": "Required when target is a path.",
             },
             "target_words": {
                 "type": "integer",
-                "description": "Default: match original length.",
+                "description": "Default: match original.",
                 "minimum": 50,
                 "maximum": 2000,
             },
@@ -2929,25 +2903,20 @@ def exec_revise_draft(session: ChatSession, args: dict[str, Any]) -> str:
     "train_style",
     _function_schema(
         "train_style",
-        "Import user writing into the style corpus. State-mutating; "
-        "confirm with user first.",
+        "Import user writing into the style corpus. State-mutating.",
         {
             "sources": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Mix of arXiv ids and local PDF paths.",
+                "description": "Mix of arXiv ids and PDF paths.",
             },
             "directory": {
                 "type": "string",
-                "description": (
-                    "Folder to scan for .pdf files (non-recursive)."
-                ),
+                "description": "Folder of .pdf files (non-recursive).",
             },
             "append": {
                 "type": "boolean",
-                "description": (
-                    "Keep prior samples per paper. Default false (replace)."
-                ),
+                "description": "Keep prior samples. Default false.",
             },
         },
     ),
@@ -3006,12 +2975,8 @@ def exec_train_style(session: ChatSession, args: dict[str, Any]) -> str:
     "build_fingerprint",
     _function_schema(
         "build_fingerprint",
-        "Compute a style fingerprint from the currently imported samples "
-        "and write it to ~/.research-agent/style/fingerprint.json. "
-        "Overwrites any existing fingerprint without archiving. "
-        "**State-mutating**: confirm with the user before calling, "
-        "especially if a fingerprint already exists (use "
-        "update_fingerprint instead to preserve history).",
+        "Compute style fingerprint from current samples (overwrites). "
+        "State-mutating; prefer update_fingerprint if one exists.",
         {},
     ),
 )
@@ -3033,10 +2998,8 @@ def exec_build_fingerprint(session: ChatSession, args: dict[str, Any]) -> str:
     "update_fingerprint",
     _function_schema(
         "update_fingerprint",
-        "Recompute the style fingerprint from the static sample corpus "
-        "PLUS any accepted Scribe revisions, and archive the previous "
-        "fingerprint as fingerprint_vN.json so style drift is auditable. "
-        "**State-mutating**: confirm with the user before calling.",
+        "Recompute fingerprint from samples + accepted revisions; archives "
+        "the prior version. State-mutating.",
         {},
     ),
 )
@@ -3060,16 +3023,13 @@ def exec_update_fingerprint(session: ChatSession, args: dict[str, Any]) -> str:
     "get_config",
     _function_schema(
         "get_config",
-        "Read configuration values from ~/.research-agent/config.yaml. "
-        "Pass a specific ``key`` to read one field (api_key is always "
-        "masked), or omit to get a summary of all keys. Read-only.",
+        "Read config from ~/.research-agent/config.yaml. api_key masked. "
+        "Read-only.",
         {
             "key": {
                 "type": "string",
                 "description": (
-                    "Optional. One of: api_key, model, base_url, "
-                    "data_dir, app_title, app_url, language, "
-                    "alert_threshold."
+                    "Optional. Omit to list all."
                 ),
             },
         },
@@ -3097,26 +3057,18 @@ def exec_get_config(session: ChatSession, args: dict[str, Any]) -> str:
     "set_config",
     _function_schema(
         "set_config",
-        "Update a single configuration field and persist to "
-        "~/.research-agent/config.yaml. **State-mutating**: confirm "
-        "the exact key + value with the user before calling — this "
-        "overwrites disk state and changes to api_key / model / "
-        "base_url require a REPL restart to take full effect.",
+        "Update one config field on disk. State-mutating.",
         {
             "key": {
                 "type": "string",
                 "description": (
-                    "One of: api_key, model, base_url, data_dir, "
-                    "app_title, app_url, language, alert_threshold."
+                    "api_key|model|base_url|data_dir|app_title|app_url|"
+                    "language|alert_threshold."
                 ),
             },
             "value": {
                 "type": "string",
-                "description": (
-                    "New value (always passed as a string; numeric "
-                    "fields like alert_threshold are parsed by the "
-                    "config layer)."
-                ),
+                "description": "Always a string; parsed by config layer.",
             },
         },
         required=["key", "value"],
@@ -3167,6 +3119,7 @@ def cmd_doctor(session: ChatSession, args: str) -> None:
         "system",
         "[doctor] "
         + ("All checks passed." if code == 0 else "One or more checks failed."),
+        metadata={"kind": "tool_log"},
     )
 
 
@@ -3174,12 +3127,7 @@ def cmd_doctor(session: ChatSession, args: str) -> None:
     "run_doctor",
     _function_schema(
         "run_doctor",
-        "Run environment health checks: config file, API key, data dir, "
-        "SQLite DB integrity, ChromaDB import, disk space, package version. "
-        "Read-only, no LLM or network calls. Renders a diagnostic table "
-        "to the user and returns a one-line summary for the agent. Call "
-        "when the user reports anomalies, asks 'is everything OK', or "
-        "before a heavy run.",
+        "Environment health checks (config, DB, Chroma, disk). Read-only.",
         {},
     ),
 )
@@ -3228,12 +3176,7 @@ def cmd_style(session: ChatSession, args: str) -> None:
     "style_show",
     _function_schema(
         "style_show",
-        "Show the user's Scribe style corpus and fingerprint summary: "
-        "how many paragraphs were imported, from which source papers, "
-        "and whether a fingerprint has been built. Read-only. Call when "
-        "the user asks 'is my style trained', 'what writing samples have "
-        "I imported', or before suggesting a draft/revise action that "
-        "needs a fingerprint.",
+        "Style corpus + fingerprint summary. Read-only.",
         {},
     ),
 )
@@ -3269,9 +3212,7 @@ def exec_style_show(session: ChatSession, args: dict[str, Any]) -> str:
     "style_history",
     _function_schema(
         "style_history",
-        "List archived fingerprint versions saved under "
-        "~/.research-agent/style/. Use when the user wants to see how "
-        "their style fingerprint has drifted over time. Read-only.",
+        "List archived fingerprint versions (style drift). Read-only.",
         {},
     ),
 )
@@ -3342,3 +3283,22 @@ def _analysis_to_dict(result: AnalysisResult) -> dict[str, Any]:
 
 def _critique_to_dict(result: CritiqueResult) -> dict[str, Any]:
     return asdict(result)
+
+
+def _apply_result_cap_overrides() -> None:
+    """Replace registered tools with copies carrying ``result_cap_chars``.
+
+    Done at module import-time (called below) so the decorator call
+    sites don't all need to repeat the override metadata. Using the
+    frozen-dataclass replace pattern keeps ``LLMTool`` immutable.
+    """
+    from dataclasses import replace
+
+    for name, cap in _RESULT_CAP_OVERRIDES.items():
+        tool = LLM_TOOLS.get(name)
+        if tool is None:  # tool not registered (e.g. partial import in tests)
+            continue
+        LLM_TOOLS[name] = replace(tool, result_cap_chars=cap)
+
+
+_apply_result_cap_overrides()

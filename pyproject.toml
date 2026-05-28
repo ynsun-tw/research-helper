@@ -83,6 +83,12 @@ dev = [
     # they need a fallback on 3.9 / 3.10.
     "tomli>=2.0; python_version < '3.11'",
 ]
+# Opt-in precise token counting; the package falls back to a ~4-char/token
+# heuristic when tiktoken isn't installed. Install with `pip install
+# research-agent[tokens]`.
+tokens = [
+    "tiktoken>=0.7",
+]
 
 [project.scripts]
 research = "research_agent.cli:main"

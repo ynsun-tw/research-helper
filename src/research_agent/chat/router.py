@@ -19,7 +19,7 @@ from research_agent.core.llm import (
     LLMProvider,
     ToolCall,
 )
-from research_agent.memory.working_memory import estimate_tokens
+from research_agent.memory.working_memory import MemoryMessage, estimate_tokens
 
 # ``?`` and ``/?`` are conventional REPL shortcuts for "give me help". We
 # rewrite them to ``/help`` at the input boundary so users don't have to
@@ -269,11 +269,23 @@ MAX_TOOL_ITERATIONS = 6
 MAX_TOOL_RESULT_CHARS = 8000
 
 
-def _cap_tool_result(text: str) -> str:
-    if len(text) <= MAX_TOOL_RESULT_CHARS:
+def _cap_tool_result(text: str, *, tool_name: str | None = None) -> str:
+    """Truncate a tool result to its per-tool cap (T3.3) or the global default.
+
+    The per-tool cap is read from ``LLMTool.result_cap_chars``. Pass
+    ``tool_name=None`` (or an unregistered name) to use the global
+    ``MAX_TOOL_RESULT_CHARS`` — that keeps callers that don't know the
+    name (e.g. tests) backwards-compatible.
+    """
+    cap = MAX_TOOL_RESULT_CHARS
+    if tool_name is not None:
+        tool = LLM_TOOLS.get(tool_name)
+        if tool is not None and tool.result_cap_chars is not None:
+            cap = tool.result_cap_chars
+    if len(text) <= cap:
         return text
-    elided = len(text) - MAX_TOOL_RESULT_CHARS
-    head = text[:MAX_TOOL_RESULT_CHARS]
+    elided = len(text) - cap
+    head = text[:cap]
     return (
         f"{head}\n\n[... {elided} chars elided to fit context budget. "
         "Re-call the tool with a narrower query / smaller limit / more "
@@ -296,6 +308,17 @@ def _chat_with_llm(session: ChatSession, user_text: str) -> None:
     huge paper or chaining many tools).
     """
     session.memory.append("user", user_text)
+    # Rolling compaction: when the live transcript grows past the
+    # threshold, fold the oldest messages into a single summary entry
+    # so long-range context survives without paying for every turn on
+    # every round-trip.
+    import contextlib
+
+    from research_agent.chat.compactor import maybe_compact_history
+
+    # Compaction must NEVER break the live agent loop.
+    with contextlib.suppress(Exception):
+        maybe_compact_history(session, session.llm)
     messages = _build_messages(session)
     tools = llm_tool_schemas() or None
     tools_overhead = _estimate_message_tokens([]) + _estimate_tools_tokens(tools)
@@ -303,6 +326,19 @@ def _chat_with_llm(session: ChatSession, user_text: str) -> None:
     in_tokens = 0
     out_tokens = 0
     rounds = 0
+    # T3.4: when the provider reports real usage, we accumulate those
+    # counts and prefer them over the local heuristic in the footer.
+    # ``usage_from_provider`` flips to True the moment we see any real
+    # usage block; otherwise the footer label stays as "~" (estimated).
+    real_in_tokens = 0
+    real_out_tokens = 0
+    usage_from_provider = False
+    # T3.2: within a single agent loop, dedup identical tool calls. If
+    # the model emits ``search_arxiv(query="X")`` twice in the same
+    # turn (e.g. after a misread tool result), the second call short-
+    # circuits to the cached result instead of paying for the network
+    # round-trip again. Keyed by (tool_name, normalized_arguments_json).
+    call_cache: dict[tuple[str, str], str] = {}
 
     try:
         for _ in range(MAX_TOOL_ITERATIONS):
@@ -310,6 +346,10 @@ def _chat_with_llm(session: ChatSession, user_text: str) -> None:
             in_tokens += _estimate_message_tokens(messages) + tools_overhead
             response = _stream_one_response(session, messages, tools)
             out_tokens += estimate_tokens(response.content)
+            if response.usage is not None and not response.usage.is_empty:
+                real_in_tokens += response.usage.prompt_tokens
+                real_out_tokens += response.usage.completion_tokens
+                usage_from_provider = True
             if not response.has_tool_calls:
                 reply = response.content.strip()
                 if not reply:
@@ -317,7 +357,13 @@ def _chat_with_llm(session: ChatSession, user_text: str) -> None:
                     session.memory.messages.pop()
                     return
                 session.memory.append("assistant", reply)
-                _print_token_footer(session, in_tokens, out_tokens, rounds)
+                _print_token_footer(
+                    session,
+                    real_in_tokens if usage_from_provider else in_tokens,
+                    real_out_tokens if usage_from_provider else out_tokens,
+                    rounds,
+                    exact=usage_from_provider,
+                )
                 return
 
             assistant_msg = ChatMessage(
@@ -328,11 +374,18 @@ def _chat_with_llm(session: ChatSession, user_text: str) -> None:
             messages.append(assistant_msg)
 
             for tc in response.tool_calls:
-                result_text = _execute_tool_call(session, tc)
+                cache_key = _tool_call_cache_key(tc)
+                if cache_key in call_cache:
+                    result_text = (
+                        f"[deduplicated] {call_cache[cache_key]}"
+                    )
+                else:
+                    result_text = _execute_tool_call(session, tc)
+                    call_cache[cache_key] = result_text
                 messages.append(
                     ChatMessage(
                         role="tool",
-                        content=_cap_tool_result(result_text),
+                        content=_cap_tool_result(result_text, tool_name=tc.name),
                         tool_call_id=tc.id,
                         name=tc.name,
                     )
@@ -349,12 +402,20 @@ def _chat_with_llm(session: ChatSession, user_text: str) -> None:
                     f"[tool {tc.name}] {result_text[:400]}",
                     metadata={"kind": "tool_log"},
                 )
+                if tc.name in SCRATCHPAD_TOOLS:
+                    _refresh_scratchpad(session, tc.name, result_text)
 
         session.console.print(
             "[yellow]Stopped after too many tool iterations.[/yellow] "
             "Try a more specific request."
         )
-        _print_token_footer(session, in_tokens, out_tokens, rounds)
+        _print_token_footer(
+            session,
+            real_in_tokens if usage_from_provider else in_tokens,
+            real_out_tokens if usage_from_provider else out_tokens,
+            rounds,
+            exact=usage_from_provider,
+        )
     except LLMError as exc:
         session.console.print(f"[red]Error:[/red] {exc}")
 
@@ -383,11 +444,21 @@ def _estimate_tools_tokens(tools: list[dict[str, object]] | None) -> int:
 
 
 def _print_token_footer(
-    session: ChatSession, in_tokens: int, out_tokens: int, rounds: int
+    session: ChatSession,
+    in_tokens: int,
+    out_tokens: int,
+    rounds: int,
+    *,
+    exact: bool = False,
 ) -> None:
-    """One-line telemetry so the user can see the cost shape of each turn."""
+    """One-line telemetry so the user can see the cost shape of each turn.
+
+    Drops the ``~`` prefix when ``exact=True`` (provider-reported usage
+    is available, T3.4) so users know the numbers are accurate.
+    """
+    prefix = "" if exact else "~"
     session.console.print(
-        f"[dim][~{in_tokens} in → ~{out_tokens} out tokens · "
+        f"[dim][{prefix}{in_tokens} in → {prefix}{out_tokens} out tokens · "
         f"{rounds} round{'s' if rounds != 1 else ''}][/dim]"
     )
 
@@ -479,16 +550,110 @@ def _arg_preview(args: dict[str, object]) -> str:
     return "(" + ", ".join(items) + ")"
 
 
-def _build_messages(session: ChatSession, *, history_limit: int = 8) -> list[ChatMessage]:
+MAX_HISTORY_TOKENS = 4000
+MIN_HISTORY_TURNS = 3
+
+# T2.3: lightweight, idempotent tool results worth preserving across
+# turns. We cache the LATEST result per tool name as a ``scratchpad``
+# memory entry; on a new call the prior entry is replaced. This lets
+# the LLM avoid re-running the same query just to look at the answer
+# again next turn. Capped per-entry so a runaway search can't bloat
+# the prompt.
+SCRATCHPAD_TOOLS: frozenset[str] = frozenset(
+    {
+        "search_arxiv",
+        "list_ideas",
+        "queue_list",
+        "queue_next",
+        "recent_searches",
+        "recall_history",
+    }
+)
+SCRATCHPAD_MAX_CHARS = 1500
+
+
+def _tool_call_cache_key(tc: ToolCall) -> tuple[str, str]:
+    """Stable (name, args) key for deduplicating identical tool calls.
+
+    Normalises ``arguments`` (JSON string) through ``json.loads`` +
+    ``json.dumps(sort_keys=True)`` so semantically-equal calls with
+    different key ordering still collide. Falls back to the raw
+    arguments string if the payload isn't valid JSON.
+    """
+    try:
+        parsed = json.loads(tc.arguments or "{}")
+        canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        canonical = tc.arguments or ""
+    return (tc.name, canonical)
+
+
+def _refresh_scratchpad(session: ChatSession, tool_name: str, result: str) -> None:
+    """Replace the prior scratchpad entry for ``tool_name`` with a fresh one.
+
+    The scratchpad lets the LLM see the most recent result of an
+    idempotent tool (search/list/queue) on the next turn without
+    re-calling it. Old entries for the same tool are pruned in-place
+    (mutated metadata) so the audit trail in WorkingMemory shows only
+    one live scratchpad per tool at any time; superseded entries get
+    re-tagged ``tool_log`` and continue to be filtered out of prompts.
+    """
+    capped = result if len(result) <= SCRATCHPAD_MAX_CHARS else (
+        result[: SCRATCHPAD_MAX_CHARS - 1] + "…"
+    )
+    for m in session.memory.messages:
+        if (
+            m.metadata.get("kind") == "scratchpad"
+            and m.metadata.get("tool_name") == tool_name
+        ):
+            m.metadata["kind"] = "tool_log"
+    session.memory.append(
+        "system",
+        f"[scratchpad {tool_name}] {capped}",
+        metadata={"kind": "scratchpad", "tool_name": tool_name},
+    )
+
+
+def _select_history_within_budget(
+    eligible: Sequence[MemoryMessage],
+    *,
+    max_tokens: int = MAX_HISTORY_TOKENS,
+    min_turns: int = MIN_HISTORY_TURNS,
+) -> list[MemoryMessage]:
+    """Walk newest→oldest, take messages until the token budget hits.
+
+    Guarantees the most recent ``min_turns`` messages are always kept
+    (truncated to fit if any one is oversized) so a single fat
+    ``/insights`` markdown can never starve the conversation of its
+    current turn. Messages are returned in chronological order.
+    """
+    selected: list[MemoryMessage] = []
+    used = 0
+    for msg in reversed(eligible):
+        cost = estimate_tokens(msg.content) + 16
+        if selected and used + cost > max_tokens and len(selected) >= min_turns:
+            break
+        selected.append(msg)
+        used += cost
+    selected.reverse()
+    return selected
+
+
+def _build_messages(
+    session: ChatSession, *, max_tokens: int = MAX_HISTORY_TOKENS
+) -> list[ChatMessage]:
     """Assemble the message array for one LLM call.
 
     Filters out ``tool_log`` messages: those are persisted for /history
     + audit, but feeding them back to the LLM next turn would be
     double-charging tokens for context the model has already digested
     via the live ``role=tool`` payload during the originating turn.
-    The default ``history_limit`` of 8 (was 20) keeps the rolling
-    conversation tight; long-range context is recoverable via
-    ``recall_history`` on demand.
+
+    History is selected by *token budget*, not message count, so a
+    single oversized message (e.g. an /insights markdown report) can't
+    silently push the previous user turns out of context. We always
+    keep the most recent ``MIN_HISTORY_TURNS`` messages regardless of
+    budget; long-range context is recoverable via ``recall_history``.
     """
     messages: list[ChatMessage] = [
         ChatMessage(role="system", content=CHAT_SYSTEM_PROMPT),
@@ -504,11 +669,24 @@ def _build_messages(session: ChatSession, *, history_limit: int = 8) -> list[Cha
                 ),
             )
         )
+    # Hoist any rolling session summary up here so it always lives in
+    # the prompt regardless of the history budget. The originals it
+    # replaced are tagged ``compacted`` and skipped below.
+    for m in session.memory.messages:
+        if m.metadata.get("kind") == "session_summary":
+            messages.append(ChatMessage(role="system", content=m.content))
+    # Hoist the most recent scratchpad entry per tool so the LLM can
+    # reference it without re-calling the underlying tool.
+    for m in session.memory.messages:
+        if m.metadata.get("kind") == "scratchpad":
+            messages.append(ChatMessage(role="system", content=m.content))
     eligible = [
         m for m in session.memory.messages
-        if m.metadata.get("kind") != "tool_log"
+        if m.metadata.get("kind") not in {
+            "tool_log", "compacted", "session_summary", "scratchpad",
+        }
     ]
-    for msg in eligible[-history_limit:]:
+    for msg in _select_history_within_budget(eligible, max_tokens=max_tokens):
         if msg.role == "user":
             role: str = "user"
         elif msg.role in {"system", "tool"}:

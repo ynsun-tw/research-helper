@@ -40,11 +40,31 @@ class ChatMessage:
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    """Provider-reported token counts (T3.4).
+
+    Mirrors the ``usage`` block returned by OpenAI-compatible APIs.
+    When the provider doesn't supply usage (e.g. local mocks, partial
+    streams), all three counts stay at ``0`` and consumers fall back
+    to the in-process ``estimate_tokens`` heuristic.
+    """
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+    @property
+    def is_empty(self) -> bool:
+        return self.prompt_tokens == 0 and self.completion_tokens == 0
+
+
+@dataclass(frozen=True)
 class ChatResponse:
     """Structured LLM reply: text plus any requested tool calls."""
 
     content: str
     tool_calls: tuple[ToolCall, ...] = ()
+    usage: TokenUsage | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -234,7 +254,11 @@ class LLMClient(LLMProvider):
                             arguments=tc.function.arguments or "{}",
                         )
                     )
-                return ChatResponse(content=msg.content or "", tool_calls=tuple(tcs))
+                return ChatResponse(
+                    content=msg.content or "",
+                    tool_calls=tuple(tcs),
+                    usage=_extract_usage(getattr(resp, "usage", None)),
+                )
             except (APIConnectionError, RateLimitError, APIStatusError) as exc:
                 last_error = exc
                 if attempt + 1 >= self.max_retries:
@@ -259,6 +283,10 @@ class LLMClient(LLMProvider):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
+            # T3.4: ask OpenAI/OpenRouter for the usage block. It arrives
+            # on the final chunk (with empty ``choices``) and is the only
+            # way to get real token counts during a streaming completion.
+            "stream_options": {"include_usage": True},
         }
         if tools:
             kwargs["tools"] = list(tools)
@@ -274,9 +302,15 @@ class LLMClient(LLMProvider):
                 # to ``function.arguments``. We accumulate into a dict keyed
                 # by stream index and finalize at the end.
                 tc_acc: dict[int, dict[str, str]] = {}
+                usage_payload: Any = None
                 for chunk in stream:
                     if not isinstance(chunk, ChatCompletionChunk):
                         continue
+                    # Final usage chunk has empty choices but a populated
+                    # ``usage`` block; capture it before bailing on choices.
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage is not None:
+                        usage_payload = chunk_usage
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -313,7 +347,9 @@ class LLMClient(LLMProvider):
                         )
                     )
                 return ChatResponse(
-                    content="".join(content_parts), tool_calls=tuple(tcs)
+                    content="".join(content_parts),
+                    tool_calls=tuple(tcs),
+                    usage=_extract_usage(usage_payload),
                 )
             except (APIConnectionError, RateLimitError, APIStatusError) as exc:
                 last_error = exc
@@ -415,6 +451,25 @@ def _normalize_response(r: str | ChatResponse) -> ChatResponse:
     if isinstance(r, ChatResponse):
         return r
     return ChatResponse(content=r)
+
+
+def _extract_usage(raw: Any) -> TokenUsage | None:
+    """Best-effort coercion of an OpenAI ``CompletionUsage`` into TokenUsage.
+
+    Returns ``None`` on missing input so the downstream token-footer
+    code can fall back to its heuristic without conditionally branching
+    on attribute access.
+    """
+    if raw is None:
+        return None
+    try:
+        return TokenUsage(
+            prompt_tokens=int(getattr(raw, "prompt_tokens", 0) or 0),
+            completion_tokens=int(getattr(raw, "completion_tokens", 0) or 0),
+            total_tokens=int(getattr(raw, "total_tokens", 0) or 0),
+        )
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
 
 
 def _openrouter_headers(config: Config) -> dict[str, str] | None:
